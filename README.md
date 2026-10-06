@@ -21,8 +21,5 @@ Home, Revenue, Analytics, Scratchpad, Shelf, Calendar, Timers, Stats, Screen Tim
 - Claude: scans ~/.claude/projects
 - Themes: Minimal / Playful / Neon in Settings
 
-## Next to sell like NotchBuddy ($5.99)
-1. Full Xcode + Apple Developer signing + notarize `dist/*.dmg`
-2. License check (LemonSqueezy/Gumroad)
-3. Polish: MediaRemote now-playing, real ambient audio files, ScreenTime API, Stripe polling
-4. Landing page + TryMacApps submit
+## License
+Free and open source (MIT) — no payments, no license checks, no telemetry.
