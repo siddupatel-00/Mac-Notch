@@ -44,6 +44,9 @@ final class SettingsStore: ObservableObject {
     @Published var musicSidebarCollapsed: Bool = false {
         didSet { UserDefaults.standard.set(musicSidebarCollapsed, forKey: "musicSidebarCollapsed") }
     }
+    @Published var notesListWidth: Double = 160 {
+        didSet { UserDefaults.standard.set(notesListWidth, forKey: "notesListWidth") }
+    }
     @Published var autoCloseOnLeave: Bool = true {
         didSet { UserDefaults.standard.set(autoCloseOnLeave, forKey: "autoCloseOnLeave") }
     }
@@ -72,6 +75,8 @@ final class SettingsStore: ObservableObject {
         let sw = d.double(forKey: "musicSidebarWidth")
         if sw > 0 { musicSidebarWidth = min(300, max(110, sw)) }
         if d.object(forKey: "musicSidebarCollapsed") != nil { musicSidebarCollapsed = d.bool(forKey: "musicSidebarCollapsed") }
+        let nw = d.double(forKey: "notesListWidth")
+        if nw > 0 { notesListWidth = min(300, max(120, nw)) }
         if d.object(forKey: "youTubeMode") != nil { youTubeMode = min(1, max(0, d.integer(forKey: "youTubeMode"))) }
         if d.object(forKey: "clockMode") != nil { clockMode = min(2, max(0, d.integer(forKey: "clockMode"))) }
         if d.object(forKey: "autoCloseOnLeave") != nil { autoCloseOnLeave = d.bool(forKey: "autoCloseOnLeave") }

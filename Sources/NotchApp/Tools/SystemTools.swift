@@ -132,9 +132,9 @@ struct CalendarTool: View {
                         }
                         ScrollView {
                             VStack(alignment: .leading, spacing: 6) {
-                                if !hasLoaded {
+                                if !hasLoaded && selectedEvents.isEmpty {
                                     Text("Tap Load to read your agenda").font(.caption).foregroundStyle(.secondary)
-                                } else if permissionDenied {
+                                } else if permissionDenied && selectedEvents.isEmpty {
                                     Text("Permission denied").font(.caption).foregroundStyle(.secondary)
                                 } else if selectedEvents.isEmpty {
                                     if items.isEmpty {
@@ -328,7 +328,6 @@ struct TimersTool: View {
                     .multilineTextAlignment(.center)
                     .onSubmit { applyCustom() }
                 Button("Set") { applyCustom() }.buttonStyle(.bordered).controlSize(.small)
-                Text("minutes · no limit").font(.caption2).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .center)
         }
@@ -360,12 +359,9 @@ struct TimersTool: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary).controlSize(.small)
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            HStack(spacing: 6) {
+            if !t.swLaps.isEmpty {
                 Text("Laps (\(t.swLaps.count))").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear") { t.swClearLaps() }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).controlSize(.small)
-                    .disabled(t.swLaps.isEmpty)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
@@ -428,7 +424,6 @@ struct TimersTool: View {
             .frame(maxWidth: .infinity, alignment: .center)
             // Alert sound for timer + alarm: built-ins or your own file
             HStack(spacing: 6) {
-                Image(systemName: "bell").font(.caption).foregroundStyle(.secondary)
                 if let custom = t.customSoundName {
                     Button("\(custom) ✕") { t.clearCustomSound() }
                         .buttonStyle(.bordered).controlSize(.small)
@@ -443,14 +438,10 @@ struct TimersTool: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            HStack(spacing: 6) {
-                Text("Alarms (\(t.alarms.count))").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-            }
             ScrollView {
                 VStack(spacing: 4) {
                     if t.alarms.isEmpty {
-                        Text("No alarms — pick a time and tap Add").font(.caption).foregroundStyle(.secondary)
+                        Text("No alarms yet").font(.caption).foregroundStyle(.secondary)
                     } else {
                         ForEach(t.alarms) { a in
                             if editingAlarmId == a.id {
@@ -535,47 +526,76 @@ struct StatsTool: View {
                 Button("Refresh") { p.refresh() }.controlSize(.small)
             }.padding().background(.ultraThinMaterial).cornerRadius(12)
         }
+        .onAppear { p.refresh() }
     }
 }
 
 // MARK: ScreenTime
 struct ScreenTimeTool: View {
     @State private var apps: [(String, String)] = []
+    @State private var hasLoaded = false
     var body: some View {
         ToolContainer("Screen Time", subtitle: "Where the day went, app by app") {
             HStack {
                 Spacer()
-                Button("Load running apps") {
-                    apps = NSWorkspace.shared.runningApplications.prefix(12).map { ($0.localizedName ?? "?", "running") }
-                }.controlSize(.small)
+                Button("Load running apps") { load() }.controlSize(.small)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    if apps.isEmpty { Text("Tap Load running apps").foregroundStyle(.secondary) }
-                    ForEach(apps, id: \.0) { Text("\($0.0) — \($0.1)") }
+                    if !hasLoaded {
+                        HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                    } else if apps.isEmpty {
+                        Text("No running apps found").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(apps, id: \.0) { Text("\($0.0) — \($0.1)") }
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .onAppear { load() }
+    }
+    private func load() {
+        apps = NSWorkspace.shared.runningApplications.prefix(12).map { ($0.localizedName ?? "?", "running") }
+        hasLoaded = true
     }
 }
 
 // MARK: Weather (Open-Meteo, no key)
 struct WeatherTool: View {
-    @State private var text = "Tap Fetch for current conditions + 7-day outlook."
+    @State private var text = ""
+    @State private var isLoading = false
+    @State private var hasLoaded = false
     var body: some View {
         ToolContainer("Weather", subtitle: "Open-Meteo, no key needed") {
             HStack {
                 Spacer()
-                Button("Fetch") {
-                    guard let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=37.32&longitude=-122.03&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto") else { return }
-                    URLSession.shared.dataTask(with: url) { d, _, _ in
-                        guard let d, let s = String(data: d, encoding: .utf8) else { return }
-                        DispatchQueue.main.async { text = String(s.prefix(400)) }
-                    }.resume()
-                }.controlSize(.small)
+                Button("Fetch") { fetch() }.controlSize(.small)
             }
-            ScrollView { Text(text).frame(maxWidth: .infinity, alignment: .leading) }
+            ScrollView {
+                if isLoading && !hasLoaded {
+                    HStack { Spacer(); ProgressView("Loading…").font(.caption).foregroundStyle(.secondary); Spacer() }
+                } else {
+                    Text(text).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
+        .onAppear { fetch() }
+    }
+    private func fetch() {
+        guard !isLoading else { return }
+        guard let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=37.32&longitude=-122.03&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto") else { return }
+        isLoading = true
+        URLSession.shared.dataTask(with: url) { d, _, _ in
+            DispatchQueue.main.async {
+                isLoading = false
+                hasLoaded = true
+                guard let d, let s = String(data: d, encoding: .utf8), !s.isEmpty else {
+                    text = "Couldn't load weather — check connection and retry."
+                    return
+                }
+                text = String(s.prefix(400))
+            }
+        }.resume()
     }
 }
 

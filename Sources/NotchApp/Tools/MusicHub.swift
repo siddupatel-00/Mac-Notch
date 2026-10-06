@@ -27,6 +27,28 @@ struct MusicHubView: View {
     ]
 
     var hasTrack: Bool { music.title != "Nothing playing" }
+    /// Embedded YT site owns its own player UI — our strip would be dead weight.
+    var isSiteMode: Bool { sel == "YouTube" && settings.youTubeMode == 0 }
+
+    /// Volume slider shared by both strip layouts.
+    var volumeControl: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "speaker.fill")
+                .font(.caption).foregroundStyle(.secondary)
+            Slider(
+                value: Binding(
+                    get: { Double(music.volume) },
+                    set: { music.volume = Float($0) }
+                ),
+                in: 0...1
+            )
+            .frame(minWidth: 60, maxWidth: 100)
+            .controlSize(.small)
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
     var sel: String { settings.musicTab }
 
     var searchPlaceholder: String {
@@ -51,8 +73,9 @@ struct MusicHubView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Player strip: always on top — empty state when nothing picked yet
-            VStack(spacing: 6) {
+            // Player strip (Site mode hides it — the page owns that space now).
+            if !isSiteMode {
+                VStack(spacing: 6) {
                     HStack(spacing: 8) {
                     HStack(spacing: 6) {
                         if music.isPlaying { EQBars() }
@@ -93,22 +116,7 @@ struct MusicHubView: View {
                         .help(music.repeatMode == .off ? "Repeat: off" : music.repeatMode == .all ? "Repeat: all" : "Repeat: one")
                         .disabled(!hasTrack)
                     }
-                    HStack(spacing: 6) {
-                        Image(systemName: "speaker.fill")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Slider(
-                            value: Binding(
-                                get: { Double(music.volume) },
-                                set: { music.volume = Float($0) }
-                            ),
-                            in: 0...1
-                        )
-                        .frame(minWidth: 60, maxWidth: 100)
-                        .controlSize(.small)
-                        Image(systemName: "speaker.wave.3.fill")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    volumeControl
                     }
                     // Timeline below the transport
                     HStack(spacing: 8) {
@@ -136,11 +144,12 @@ struct MusicHubView: View {
                     }
                 }
                 .padding(10).background(.ultraThinMaterial).cornerRadius(12)
+            }
 
-            // Sidebar + songs
+            // Sidebar + songs (hidden in Site mode — the page takes everything)
             HStack(alignment: .top, spacing: 0) {
                 // Left: search on top of sources
-                if !settings.musicSidebarCollapsed {
+                if !isSiteMode, !settings.musicSidebarCollapsed {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
                         TextField(searchPlaceholder, text: $query)
@@ -198,8 +207,9 @@ struct MusicHubView: View {
                         .background(ResizeCursorView())
                 }
 
-                // Slim leading toggle column — visible in both states
-                VStack {
+                // Slim leading toggle column — visible in both states (not Site: no room spared)
+                if !isSiteMode {
+                    VStack {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { settings.musicSidebarCollapsed.toggle() }
                     } label: {
@@ -210,9 +220,10 @@ struct MusicHubView: View {
                     .buttonStyle(.plain)
                     .help(settings.musicSidebarCollapsed ? "Show sources sidebar" : "Hide sources sidebar")
                     Spacer()
+                    }
+                    .padding(.trailing, 6)
+                    .padding(.top, 2)
                 }
-                .padding(.trailing, 6)
-                .padding(.top, 2)
 
                 // Middle: songs for the selected source
                 Group {
@@ -240,19 +251,51 @@ struct MusicHubView: View {
         }
     }
 
-    // MARK: YouTube — List (fast names, in-notch audio) or Site (embedded web)
+    // MARK: YouTube — List (fast names, in-notch audio) or Site (embedded web, full-bleed)
     var ytList: some View {
         VStack(spacing: 6) {
-            Picker("", selection: $settings.youTubeMode) {
-                Text("Site").tag(0)
-                Text("List").tag(1)
+            HStack(spacing: 8) {
+                if settings.youTubeMode == 0 {
+                    // Sidebar is hidden in full-bleed: this is the way back out.
+                    Button {
+                        settings.musicSidebarCollapsed = false
+                        settings.youTubeMode = 1
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Back to sources")
+                }
+                Picker("", selection: $settings.youTubeMode) {
+                    Text("Site").tag(0)
+                    Text("List").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .frame(maxWidth: 220)
+                if settings.youTubeMode == 0 {
+                    Button { YTWebPlayer.shared.goBack() } label: { Image(systemName: "chevron.left") }
+                        .buttonStyle(.plain).font(.body)
+                    Button { YTWebPlayer.shared.goForward() } label: { Image(systemName: "chevron.right") }
+                        .buttonStyle(.plain).font(.body)
+                    Button { YTWebPlayer.shared.reload() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.plain).font(.body)
+                    Button { YTWebPlayer.shared.openHome() } label: { Image(systemName: "house") }
+                        .buttonStyle(.plain).font(.body)
+                    Spacer()
+                    volumeControl
+                        .frame(width: 150)
+                } else {
+                    Spacer()
+                }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .frame(maxWidth: 220)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(.secondary)
             if settings.youTubeMode == 0 {
-                ytSiteView
+                YTWebHost()
+                    .cornerRadius(10)
+                    .frame(maxHeight: .infinity)
             } else {
                 ytResultsList
             }
@@ -291,6 +334,19 @@ struct MusicHubView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if !yt.searching && !yt.failed && yt.results.isEmpty && yt.suggestions.isEmpty {
+                // Empty list: search button right here so the pane is never a dead box.
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title2).foregroundStyle(.secondary)
+                    Text(query.isEmpty ? "Type above and hit Search" : "No songs found — try another search")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Search") { runSearch() }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
             List(yt.results) { t in
                 HStack(spacing: 8) {
                     if let url = URL(string: t.thumb), !t.thumb.isEmpty {
@@ -324,28 +380,6 @@ struct MusicHubView: View {
                 .onTapGesture { yt.play(t) }
                 .onHover { hovering in if hovering { yt.prefetch(t.id) } }
             }.listStyle(.plain).frame(maxHeight: .infinity)
-        }
-    }
-
-    // MARK: YouTube embedded site
-    var ytSiteView: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Button { YTWebPlayer.shared.goBack() } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.plain).font(.body)
-                Button { YTWebPlayer.shared.goForward() } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.plain).font(.body)
-                Button { YTWebPlayer.shared.reload() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).font(.body)
-                Button { YTWebPlayer.shared.openHome() } label: { Image(systemName: "house") }
-                    .buttonStyle(.plain).font(.body)
-                Spacer()
-                Text("music.youtube.com — in the notch").font(.caption2).foregroundStyle(.secondary)
-            }
-            .foregroundStyle(.secondary)
-            YTWebHost()
-                .cornerRadius(10)
-                .frame(maxHeight: .infinity)
         }
     }
 

@@ -18,6 +18,11 @@ if [ -f "Resources/yt-dlp" ]; then
   xattr -d com.apple.quarantine "$APP_BUNDLE/Contents/Resources/yt-dlp" 2>/dev/null || true
 fi
 
+# EasyList-derived content-blocker rules (see Scripts/refresh-adblock.sh)
+if [ -f "Resources/adblock-youtube.json" ]; then
+  cp "Resources/adblock-youtube.json" "$APP_BUNDLE/Contents/Resources/adblock-youtube.json"
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
