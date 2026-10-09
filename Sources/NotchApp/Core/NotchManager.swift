@@ -54,8 +54,10 @@ final class NotchManager: ObservableObject {
     }
 
     func detectNotch() {
-        if let screen = NSScreen.main, #available(macOS 14.0, *) {
-            hasNotch = screen.safeAreaInsets.top > 0
+        if #available(macOS 14.0, *) {
+            // Any screen with a top safe-area has a camera housing — not just
+            // NSScreen.main (wrong on multi-display when an external is main).
+            hasNotch = NSScreen.screens.contains { $0.safeAreaInsets.top > 0 }
         }
         if SettingsStore.shared.simulateNotch { hasNotch = true }
     }
@@ -396,12 +398,11 @@ final class NotchManager: ObservableObject {
     private func tick() {
         guard let screen = mainScreen() else { return }
         let mouse = NSEvent.mouseLocation
-        // Only the built-in screen's notch opens it — never middle of an external display
-        guard screen.frame.contains(mouse) || !isExpanded else {
-            // Mouse on another display while expanded: leave open, don't glitch-jump
-            return
-        }
+        // Mouse on another display while expanded: treat as left-the-panel
+        // (hysteresis still applies) instead of sticking open forever.
+        let onMainScreen = screen.frame.contains(mouse)
         if !isExpanded {
+            guard onMainScreen else { cancelOpen(); return }
             if hotRect(in: screen).contains(mouse) { scheduleOpen() } else { cancelOpen() }
         } else {
             guard let panel else { return }

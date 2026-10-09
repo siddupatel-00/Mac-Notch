@@ -14,8 +14,13 @@ curl -sL --max-time 90 -o "$WORK/easyprivacy.txt" https://easylist.to/easylist/e
 echo "== extracting YouTube/ad-delivery network + cosmetic rules"
 printf '[Adblock Plus 2.0]\n' > "$WORK/yt-ads.txt"
 grep -ahiE 'doubleclick|googlesyndication|googleadservices|imasdk|moatads|/pagead|stats/ads|innovid|2mdn|googletagservices|vast|vpaid|freewheel|spotx' "$WORK/easylist.txt" "$WORK/easyprivacy.txt" | grep -av '^\S*:!' >> "$WORK/yt-ads.txt" || true
-grep -ahiE 'youtube\.com/(pagead|youtubei/v1/player/ad_break|get_video_info|ptracking|api/stats/ads)|youtube\.com##|youtube\.com#@#|googlesyndication\.com\^.*youtube|imasdk.*youtube|youtube.*imasdk' "$WORK/easylist.txt" >> "$WORK/yt-ads.txt" || true
+grep -ahiE 'youtube\.com/(pagead|get_video_info|ptracking|api/stats/ads)|youtube\.com##|youtube\.com#@#|googlesyndication\.com\^.*youtube|imasdk.*youtube|youtube.*imasdk' "$WORK/easylist.txt" >> "$WORK/yt-ads.txt" || true
 grep -v '^\[Adblock' "$WORK/yt-ads.txt" | sort -u > "$WORK/yt-body.txt"
+# NEVER emit a rule that blocks googlevideo.com media delivery: that pattern is
+# why songs used to die at ~40-50s (the adblock ate audio segments). Ad-delivery
+# and analytics hosts stay blocked; the playback CDN is whitelisted by design.
+grep -av 'googlevideo' "$WORK/yt-body.txt" > "$WORK/yt-body2.txt" || true
+mv "$WORK/yt-body2.txt" "$WORK/yt-body.txt"
 printf '[Adblock Plus 2.0]\n' > "$WORK/yt-ads.txt"
 cat "$WORK/yt-body.txt" >> "$WORK/yt-ads.txt"
 echo "== converting ($(wc -l < "$WORK/yt-ads.txt") filters)"

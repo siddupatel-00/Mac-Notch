@@ -37,6 +37,10 @@ final class MusicService: ObservableObject {
 
     /// Currently playing stream id (YouTube navigation).
     var currentAudioId: String?
+    /// True when the user asked the site to play (strip/media keys/next).
+    /// The watchdog auto-resumes only in this state — a deliberate user pause
+    /// is never overridden.
+    var expectingWebPlay = false
 
     private var player: AVPlayer?
     private var localTracks: [URL] = []
@@ -222,6 +226,8 @@ final class MusicService: ObservableObject {
         case "YouTube Web":
             YTWebPlayer.shared.toggleWeb()
             // Optimistic flip; the 2s poll corrects it from the page truth.
+            // Intent follows what the user SAW: pause icon -> pause, play icon -> play.
+            expectingWebPlay = !isPlaying
             isPlaying.toggle()
             RemoteCommands.refresh()
             return
@@ -239,7 +245,7 @@ final class MusicService: ObservableObject {
     /// Media-key surface (F7–F9 / headphones / Touch Bar).
     var hasPlayable: Bool { player?.currentItem != nil || !localTracks.isEmpty || ((source == "Spotify" || source == "Apple") && title != "Nothing playing") || source == "YouTube Web" }
     func resume() {
-        if source == "YouTube Web" { YTWebPlayer.shared.toggleWeb(); return }
+        if source == "YouTube Web" { expectingWebPlay = true; YTWebPlayer.shared.playWeb(); return }
         if player?.currentItem != nil { player?.play(); isPlaying = true }
         else if !localTracks.isEmpty { playLocal(at: localIndex) }
         RemoteCommands.refresh()
@@ -247,6 +253,7 @@ final class MusicService: ObservableObject {
     func pause() {
         if source == "YouTube Web" { YTWebPlayer.shared.pauseWeb() }
         else { player?.pause() }
+        expectingWebPlay = false
         isPlaying = false
         RemoteCommands.refresh()
     }
@@ -255,6 +262,7 @@ final class MusicService: ObservableObject {
 
     func stopAppPlayback() {
         player?.pause()
+        expectingWebPlay = false
         DispatchQueue.main.async { self.isPlaying = false }
     }
 
@@ -305,6 +313,8 @@ final class MusicService: ObservableObject {
         }
         // External app takes over: stop the notch player first — one source at a time.
         if action == "toggle" || action == "next" || action == "prev" {
+            YTWebPlayer.shared.pauseWeb()
+            expectingWebPlay = false
             DispatchQueue.main.async {
                 self.player?.pause()
                 self.isPlaying = false
@@ -360,6 +370,7 @@ final class MusicService: ObservableObject {
     func nextTrack() {
         switch source {
         case "YouTube Web":
+            expectingWebPlay = true
             YTWebPlayer.shared.nextWeb()
             isPlaying = true
             RemoteCommands.refresh()
@@ -381,6 +392,7 @@ final class MusicService: ObservableObject {
     func prevTrack() {
         switch source {
         case "YouTube Web":
+            expectingWebPlay = true
             YTWebPlayer.shared.prevWeb()
             isPlaying = true
             RemoteCommands.refresh()

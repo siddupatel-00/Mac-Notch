@@ -233,17 +233,46 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
     }
 
     /// Direct audio URL, cached (fast path) or freshly resolved.
-    /// player_client=android skips the web client's slow PO-token handshake.
+    /// Tries audio-ONLY formats first (itag 140 m4a — AVPlayer-friendly, no
+    /// video download). The android client has no audio-only formats at all
+    /// (it forced muxed itag 18 = 360p video + audio), so it is the fallback
+    /// and only used when the default client offers nothing playable.
     private func resolveURL(_ id: String) -> URL? {
         if let cached = cachedURL(id) { return cached }
-        guard let out = launch([
+        // Preferred: plain audio track (itag 140 = m4a/AAC, the only
+        // AVPlayer-playable audio-only itags — 250/249 are webm/opus).
+        if let url = resolveOnce(id, extractorArgs: nil),
+           let itag = Self.itag(of: url),
+           [140, 141].contains(itag) {
+            return url
+        }
+        // Fallback: android client (muxed mp4 — audio still plays, no video shown).
+        if let url = resolveOnce(id, extractorArgs: "youtube:player_client=android") {
+            return url
+        }
+        return nil
+    }
+
+    /// The `itag` query parameter of a googlevideo URL (format id).
+    static func itag(of url: URL) -> Int? {
+        guard url.absoluteString.contains("itag=") else { return nil }
+        let after = url.absoluteString.components(separatedBy: "itag=").last ?? ""
+        let digits = after.prefix { $0.isNumber }
+        return Int(digits)
+    }
+
+    private func resolveOnce(_ id: String, extractorArgs: String?) -> URL? {
+        var args = [
             "-g", "-f", "bestaudio[ext=m4a]/bestaudio/best",
             "--no-playlist", "--no-warnings",
             "--socket-timeout", "8", "--retries", "2",
-            "--extractor-args", "youtube:player_client=android",
-            "https://www.youtube.com/watch?v=\(id)",
-        ], timeout: 45),
-        let first = out.components(separatedBy: "\n").first(where: { $0.hasPrefix("http") }),
+        ]
+        if let ea = extractorArgs {
+            args += ["--extractor-args", ea]
+        }
+        args.append("https://www.youtube.com/watch?v=\(id)")
+        guard let out = launch(args, timeout: 45),
+              let first = out.components(separatedBy: "\n").first(where: { $0.hasPrefix("http") }),
               let url = URL(string: first.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }

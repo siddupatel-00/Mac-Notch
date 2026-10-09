@@ -26,46 +26,89 @@ final class YTWebPlayer: NSObject, ObservableObject {
     private var inAd = false
     private var adMutedByUs = false
     private var lastVolume: Float = 0.8
+    // Watchdog counters: consecutive ad-positive ticks, and consecutive muted ticks.
+    private var adStreak = 0
+    private var mutedStreak = 0
+    // Paused-while-expected counter: unexpected stalls get resumed, deliberate
+    // user pauses (expectingWebPlay == false) are never touched.
+    private var pausedStreak = 0
 
+    /// Flight recorder: timestamped player/ad decisions for diagnosing kills.
+    /// Read at ~/Library/Logs/NotchApp/ytweb.log. Rotates at ~200KB.
     private override init() {
         super.init()
         setup()
     }
 
+    /// Runtime bisection switches (set with `defaults write com.local.notchapp <key> -bool`):
+    /// - ytNoAdPatch  : skip the youtubei response patching
+    /// - ytNoAdBlock  : skip the content-rule list entirely
+    static var debugNoAdPatch: Bool { UserDefaults.standard.bool(forKey: "ytNoAdPatch") }
+    static var debugNoAdBlock: Bool { UserDefaults.standard.bool(forKey: "ytNoAdBlock") }
+
     private func setup() {
         let cfg = WKWebViewConfiguration()
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        // NOTE: no CSS that hides the player's <video> on purpose. YouTube's
+        // web player STOPS loading when its video element is display:none or
+        // zero-sized (that caused songs to freeze). Playback reliability
+        // always wins over the audio-only cosmetic.
         // Response patching (the layer real YouTube adblockers use): neuter ad
         // scheduling inside youtubei player/next responses BEFORE the player
         // ever sees an ad. Runs at document start, main frame only.
-        cfg.userContentController.addUserScript(WKUserScript(
-            source: Self.adPatchScript,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
+        if !Self.debugNoAdPatch {
+            cfg.userContentController.addUserScript(WKUserScript(
+                source: Self.adPatchScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
         // Aggressive ad/tracker blocking at the network layer. Compiles async;
         // if the page beats it, we reload once so rules apply to everything.
-        Self.applyAdBlock(to: cfg.userContentController) { [weak self] in
-            guard let self, let w = self.web, w.url != nil else { return }
-            w.reload()
+        if !Self.debugNoAdBlock {
+            Self.applyAdBlock(to: cfg.userContentController) { [weak self] in
+                guard let self, let w = self.web, w.url != nil else { return }
+                w.reload()
+            }
         }
         let w = WKWebView(frame: NSRect(x: 0, y: 0, width: 8, height: 8), configuration: cfg)
+        w.navigationDelegate = self
         // YT Music refuses the default WebKit UA ("not optimised for your browser").
         w.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         // The site's layout is wider than the notch panel — zoom out so it all fits.
         w.pageZoom = 0.72
         web = w
-        // Parking spot: 2px on-screen corner (offscreen windows get suspended).
-        let hold = NSView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
-        holder = hold
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 2, height: 2),
+        // Parking spot: a REAL-SIZED transparent, click-through window.
+        // WebKit suspends media loading for a webview whose window is
+        // occluded/invisible — the old 2×2 window at (0,0) sat under the Dock,
+        // so after the initial buffer drained (~40-90s) every song starved
+        // while still reporting paused=false. A full-size clear window that is
+        // actually rendered (just invisible to the user) keeps the page live.
+        let parkSize = NSSize(width: 760, height: 460)
+        let parkFrame: NSRect
+        if let screen = NSScreen.main {
+            parkFrame = NSRect(x: screen.frame.midX - parkSize.width / 2,
+                              y: screen.frame.maxY - parkSize.height,
+                              width: parkSize.width, height: parkSize.height)
+        } else {
+            parkFrame = NSRect(origin: .zero, size: parkSize)
+        }
+        let panel = NSPanel(contentRect: parkFrame,
                             styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.level = .normal
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        // Same level as the notch panel so it is never hidden behind the
+        // menu bar / Dock (both of which would re-introduce the occlusion).
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         panel.ignoresMouseEvents = true
+        panel.hasShadow = false
+        let hold = NSView(frame: NSRect(origin: .zero, size: parkSize))
+        hold.wantsLayer = true
+        hold.layer?.backgroundColor = NSColor.clear.cgColor
+        holder = hold
         hold.addSubview(w)
+        w.frame = hold.bounds
         w.autoresizingMask = [.width, .height]
         panel.contentView = hold
         holderPanel = panel // RETAINED
@@ -180,9 +223,12 @@ final class YTWebPlayer: NSObject, ObservableObject {
     func detach() {
         guard let w = web, let hold = holder, w.superview !== hold else { return }
         w.removeFromSuperview()
-        w.frame = NSRect(x: 0, y: 0, width: 8, height: 8)
-        w.autoresizingMask = []
+        w.frame = hold.bounds
+        w.autoresizingMask = [.width, .height]
         hold.addSubview(w)
+        // Re-assert on-screen ordering: an unoccluded park window is what keeps
+        // media buffering alive while the tab is closed.
+        holderPanel?.orderFrontRegardless()
     }
 
     private func ensureLoaded() {
@@ -245,6 +291,25 @@ final class YTWebPlayer: NSObject, ObservableObject {
         """, completionHandler: nil)
     }
 
+    /// Play-only (never toggles off). Used by media-key resume and the
+    /// expectingWebPlay watchdog — resume() must not pause an already-playing site.
+    func playWeb() {
+        web?.evaluateJavaScript("""
+        (()=>{
+          \(Self.pickJS)
+          const v=window.__nv();
+          // If the site's own button shows "play" (i.e. paused), click it so the
+          // site UI stays in sync; otherwise drive the element directly.
+          try{
+            const b=document.querySelector('ytmusic-player-bar #play-pause-button');
+            const label=((b&&(b.getAttribute('aria-label')||b.title||''))||'').toLowerCase();
+            if(b&&(label.indexOf('play')!==-1)&&v&&v.paused){b.click();return;}
+          }catch(e){}
+          if(v&&v.paused){try{v.play();}catch(e){}}
+        })()
+        """, completionHandler: nil)
+    }
+
     func nextWeb() {
         web?.evaluateJavaScript("""
         (()=>{
@@ -282,21 +347,74 @@ final class YTWebPlayer: NSObject, ObservableObject {
     /// strip, timeline, volume and media keys all follow it. One source at a time.
     /// Ads (`.ad-showing`) are muted + skip-clicked here and NEVER adopted into
     /// the strip, history, or timeline.
+    // Stall / death tracking for the watchdog below.
+    private var lastAdvanceT: Double = -1
+    private var frozenTicks = 0
+    private var deadTicks = 0
+    private var lastPlayURL: URL?
+    private var resumeAfterLoad = false
+    // Heartbeat counter: one STATE line every ~30s so playback can be verified.
+    private var hbTicks = 0
+
+    private func alog(_ msg: String) {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/NotchApp", isDirectory: true)
+            .appendingPathComponent("ytweb.log")
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int,
+               size > 200_000 {
+                try "".write(to: url, atomically: true, encoding: .utf8)
+            }
+            // FileHandle(forWritingTo:) does NOT create a missing file — create it first.
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            let h = try FileHandle(forWritingTo: url)
+            defer { try? h.close() }
+            if #available(macOS 10.15, *) {
+                try h.seekToEnd()
+            } else {
+                h.seekToEndOfFile()
+            }
+            try h.write(contentsOf: Data("[\(Date())] \(msg)\n".utf8))
+        } catch {
+            // Logging must never crash the player.
+        }
+    }
+
     private func tick() {
         web?.evaluateJavaScript("""
         (()=>{
           \(Self.pickJS)
+          // Auto-confirm "still watching / listening" dialogs so playback
+          // never stalls waiting on a human click.
+          try{
+            var dlgs=document.querySelectorAll('yt-confirm-dialog-renderer,paper-dialog');
+            for(var di=0;di<dlgs.length;di++){
+              var dt=((dlgs[di].innerText||'').toLowerCase());
+              if(dt.indexOf('continue watching')!==-1||dt.indexOf('still watching')!==-1||dt.indexOf('still listening')!==-1){
+                var btns=dlgs[di].querySelectorAll('button');
+                for(var bi=0;bi<btns.length;bi++){
+                  var bt=((btns[bi].innerText||'').trim().toLowerCase());
+                  if(bt==='yes'||bt==='continue'||bt==='ok'){btns[bi].click();break;}
+                }
+              }
+            }
+          }catch(e){}
           const v=window.__nv();
-          if(!v)return 'none';
-          // Authoritative first: the player's own ad state. Then DOM fallbacks.
+          if(!v)return JSON.stringify({dead:true});
+          // Hardened ad detection: player's own state, or a VISIBLE ad node.
+          // (Hidden DOM leftovers must not count — that was muting real songs.)
           var adState=-1;
           try{var mp=document.querySelector('#movie_player');if(mp&&mp.getAdState)adState=mp.getAdState();}catch(e){}
-          const ad=(adState===1)||!!document.querySelector('#movie_player.ad-showing,.ytp-ad-player-overlay,.ytp-ad-text,.ytp-ad-message,.ytp-ad-badge,.ytp-ad-skip-button,.ytp-ad-skip-button-modern');
+          function vis(el){try{return !!(el&&(el.offsetWidth||el.offsetHeight||(el.getClientRects&&el.getClientRects().length)));}catch(e){return false;}}
+          var skipBtn=document.querySelector('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad button');
+          var ad=(adState===1)||!!(document.querySelector('#movie_player.ad-showing')&&vis(document.querySelector('#movie_player')))||vis(skipBtn);
           if(ad){
             v.muted=true;
-            try{v.currentTime=Math.max(v.currentTime||0,(isFinite(v.duration)?v.duration:0));}catch(e){}
-            const b=document.querySelector('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad button');
-            if(b)b.click();
+            if(skipBtn&&vis(skipBtn)){try{skipBtn.click();}catch(e){}}
           }
           const t=(s)=>((s||'').trim());
           const bar=document.querySelector('ytmusic-player-bar');
@@ -304,25 +422,87 @@ final class YTWebPlayer: NSObject, ObservableObject {
             || t(document.title.replace(/\\s*-\\s*YouTube Music\\s*$/,'').split(' - ')[0]);
           const artist=t(bar?.querySelector('.byline')?.textContent)
             || t(document.title.replace(/\\s*-\\s*YouTube Music\\s*$/,'').split(' - ').slice(1).join(' - '));
-          return JSON.stringify({p:!!v.paused,t:v.currentTime||0,d:v.duration||0,title:title,artist:artist,ad:ad});
+          return JSON.stringify({
+            p:!!v.paused,t:v.currentTime||0,d:v.duration||0,title:title,artist:artist,ad:ad,as:adState,
+            rs:v.readyState,ns:v.networkState,err:(v.error?v.error.code:-1),
+            end:(v.ended?1:0),seek:(v.seeking?1:0),
+            buf:(v.buffered&&v.buffered.length?v.buffered.end(v.buffered.length-1):0),
+            dec:(window.webkitVideoDecodedByteCount||0),vol:v.volume,mu:(v.muted?1:0),
+            src:(v.currentSrc||'').slice(0,60),
+            vids:document.querySelectorAll('video').length,
+            ps:(function(){try{return document.querySelector('#movie_player')&&document.querySelector('#movie_player').getPlayerState?document.querySelector('#movie_player').getPlayerState():-1}catch(e){return -1}})()
+          });
         })()
         """) { [weak self] res, _ in
             guard let self,
-                  let s = res as? String, s != "none",
+                  let s = res as? String,
                   let d = s.data(using: .utf8),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+            // Dead page (no usable video element at all).
+            if (j["dead"] as? Bool) ?? false {
+                if self.webIsPlaying {
+                    // Don't nuke user navigation: only auto-reload when the page
+                    // that died is the same one that was playing. If the user
+                    // navigated (home/search/new song loading), wait it out.
+                    let cur = self.web?.url
+                    let samePage = (cur != nil && cur == self.lastPlayURL) || self.lastPlayURL == nil
+                    if samePage {
+                        self.deadTicks += 1
+                        if self.deadTicks >= 4 {
+                            self.deadTicks = 0
+                            self.alog("DEAD-RELOAD (no video element for 8s) url=\(cur?.absoluteString ?? "nil")")
+                            self.web?.reload()
+                        }
+                    } else {
+                        self.deadTicks = 0
+                    }
+                }
+                return
+            }
+            self.deadTicks = 0
             let isAd = (j["ad"] as? Bool) ?? false
+            let adState = (j["as"] as? Int) ?? -99
             self.inAd = isAd
+            // Heartbeat: ~1 line / 30s of real state — used to verify playback.
+            self.hbTicks += 1
+            if self.hbTicks % 15 == 0 {
+                self.alog("STATE playing=\((j["p"] as? Bool) ?? true ? "no" : "yes") t=\(String(format: "%.1f", (j["t"] as? Double) ?? -1)) buf=\(String(format: "%.1f", (j["buf"] as? Double) ?? -1)) rs=\(j["rs"] ?? -1) ns=\(j["ns"] ?? -1) err=\(j["err"] ?? -1) ps=\(j["ps"] ?? -1) dec=\(String(format: "%.1f", (j["dec"] as? Double) ?? -1)) ad=\(isAd) as=\(adState) title=\(self.lastWebTitle)")
+            }
             if isAd {
+                self.adStreak += 1
                 // Stay muted through the ad; restore the user's mute state after.
                 // MUST target __nv() (the audible element) — a bare querySelector
                 // can hit a hidden element while the ad blares from the real one.
                 if !self.adMutedByUs {
                     self.adMutedByUs = true
+                    self.mutedStreak = 0
+                    self.alog("AD-START as=\(adState) t=\(String(format: "%.1f", (j["t"] as? Double) ?? -1)) title=\(self.lastWebTitle)")
                     self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v)v.muted=true;})()", completionHandler: nil)
+                } else {
+                    self.mutedStreak += 1
+                }
+                // Seek past only from the 2nd consecutive ad tick: a single-tick
+                // blip must never be able to skip a real song.
+                if self.adStreak == 2 {
+                    self.alog("AD-SEEK as=\(adState)")
+                    self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v&&isFinite(v.duration)&&v.duration>0){try{v.currentTime=v.duration;}catch(e){}}const b=document.querySelector('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad button');if(b){try{b.click();}catch(e){}}})()", completionHandler: nil)
+                } else {
+                    self.web?.evaluateJavaScript("(()=>{const b=document.querySelector('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad button');if(b){try{b.click();}catch(e){}}})()", completionHandler: nil)
+                }
+                // Dead-man's switch: muted longer than ~45s straight is almost
+                // certainly a false positive — unmute rather than silence songs.
+                if self.mutedStreak >= 22 {
+                    self.mutedStreak = 0
+                    self.alog("AD-FORCE-UNMUTE after 45s (likely false positive)")
+                    self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v)v.muted=\(self.lastVolume <= 0);})()", completionHandler: nil)
                 }
                 return
             }
+            if self.adStreak > 0 {
+                self.alog("AD-END after \(self.adStreak) ticks")
+            }
+            self.adStreak = 0
+            self.mutedStreak = 0
             if self.adMutedByUs {
                 self.adMutedByUs = false
                 let m = self.lastVolume <= 0
@@ -346,6 +526,32 @@ final class YTWebPlayer: NSObject, ObservableObject {
                     m.position = t
                     if dur.isFinite, dur > 0 { m.trackLength = dur }
                     if !m.isPlaying { m.isPlaying = true }
+                    self.pausedStreak = 0
+                    if !title.isEmpty { self.lastPlayURL = self.web?.url }
+                    if self.resumeAfterLoad {
+                        // Page reloaded after a death: press play (autoplay allowed).
+                        self.resumeAfterLoad = false
+                        self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
+                    }
+                    if t != self.lastAdvanceT {
+                        self.lastAdvanceT = t
+                        self.frozenTicks = 0
+                    } else {
+                        // Clock frozen while "playing" = stalled buffer. v.play()
+                        // on a truly-playing element is a harmless no-op, so call
+                        // it unconditionally (the old v.paused guard never fired
+                        // here because playing implies !paused). Second stage
+                        // nudges the clock forward in case play() alone stalls.
+                        self.frozenTicks += 1
+                        if self.frozenTicks == 6 {
+                            self.alog("STALL-RESUME at t=\(String(format: "%.1f", t))")
+                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v){try{v.play();}catch(e){}}})()", completionHandler: nil)
+                        } else if self.frozenTicks >= 12 {
+                            self.frozenTicks = 0
+                            self.alog("STALL-SEEK at t=\(String(format: "%.1f", t))")
+                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v){try{if(isFinite(v.duration)&&v.duration>0)v.currentTime=Math.min(v.duration,Math.max(0,(v.currentTime||0)+1));v.play();}catch(e){}}})()", completionHandler: nil)
+                        }
+                    }
                     if !title.isEmpty, title != self.lastWebTitle {
                         self.lastWebTitle = title
                         PlayHistoryStore.shared.record(title: title, source: "YouTube Web")
@@ -353,6 +559,19 @@ final class YTWebPlayer: NSObject, ObservableObject {
                     RemoteCommands.refresh()
                 } else if m.source == "YouTube Web" {
                     if m.isPlaying { m.isPlaying = false }
+                    self.frozenTicks = 0
+                    // Unexpected stall (not a user pause — those clear the flag):
+                    // give it ~6s to recover on its own, then press play.
+                    if m.expectingWebPlay {
+                        self.pausedStreak += 1
+                        if self.pausedStreak >= 3 {
+                            self.pausedStreak = 0
+                            self.alog("STALL-RESUME (paused 6s while expected)")
+                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
+                        }
+                    } else {
+                        self.pausedStreak = 0
+                    }
                     RemoteCommands.refresh()
                 }
             }
@@ -395,6 +614,25 @@ final class YTWebPlayer: NSObject, ObservableObject {
                 controller.add(list)
             }
             done()
+        }
+    }
+}
+
+// MARK: - Web process recovery
+
+extension YTWebPlayer: WKNavigationDelegate {
+    /// If the web content process dies mid-song, reload the last playing page
+    /// and resume. Without this the tab goes permanently white/silent.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        lastAdvanceT = -1
+        frozenTicks = 0
+        deadTicks = 0
+        guard webIsPlaying || MusicService.shared.source == "YouTube Web" else { return }
+        resumeAfterLoad = true
+        if let u = lastPlayURL {
+            webView.load(URLRequest(url: u))
+        } else {
+            webView.reload()
         }
     }
 }

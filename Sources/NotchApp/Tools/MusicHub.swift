@@ -146,20 +146,45 @@ struct MusicHubView: View {
                 .padding(10).background(.ultraThinMaterial).cornerRadius(12)
             }
 
-            // Sidebar + songs (hidden in Site mode — the page takes everything)
+            // Persistent toolbar: sidebar toggle, Site/List, search. Always
+            // visible — never hidden by the sidebar state.
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { settings.musicSidebarCollapsed.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(settings.musicSidebarCollapsed ? "Show sources sidebar" : "Hide sources sidebar")
+
+                if sel == "YouTube" {
+                    Picker("", selection: $settings.youTubeMode) {
+                        Text("Site").tag(0)
+                        Text("List").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .frame(width: 110)
+                }
+
+                TextField(searchPlaceholder, text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(sel == "Spotify" || sel == "Apple")
+                    .onSubmit { runSearch() }
+                    .onChange(of: query) { _, v in yt.suggestDebounced(v) }
+                Button(yt.searching && sel == "YouTube" && settings.youTubeMode == 1 ? "…" : "Go") { runSearch() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(yt.searching && sel == "YouTube" && settings.youTubeMode == 1
+                              || sel == "Spotify" || sel == "Apple")
+            }
+
+            // Sidebar + songs (sidebar works in every mode, including Site)
             HStack(alignment: .top, spacing: 0) {
-                // Left: search on top of sources
-                if !isSiteMode, !settings.musicSidebarCollapsed {
+                // Left: sources
+                if !settings.musicSidebarCollapsed {
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                        TextField(searchPlaceholder, text: $query)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { runSearch() }
-                            .onChange(of: query) { _, v in yt.suggestDebounced(v) }
-                        Button(yt.searching && sel == "YouTube" && settings.youTubeMode == 1 ? "…" : "Go") { runSearch() }
-                            .buttonStyle(.borderedProminent).controlSize(.small)
-                            .disabled(yt.searching && sel == "YouTube" && settings.youTubeMode == 1)
-                        }
                         ForEach(sources, id: \.id) { s in
                             HStack(spacing: 8) {
                                 Image(systemName: s.icon).frame(width: 16).foregroundStyle(sel == s.id ? .primary : .secondary)
@@ -207,24 +232,6 @@ struct MusicHubView: View {
                         .background(ResizeCursorView())
                 }
 
-                // Slim leading toggle column — visible in both states (not Site: no room spared)
-                if !isSiteMode {
-                    VStack {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { settings.musicSidebarCollapsed.toggle() }
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(settings.musicSidebarCollapsed ? "Show sources sidebar" : "Hide sources sidebar")
-                    Spacer()
-                    }
-                    .padding(.trailing, 6)
-                    .padding(.top, 2)
-                }
-
                 // Middle: songs for the selected source
                 Group {
                     switch sel {
@@ -255,26 +262,6 @@ struct MusicHubView: View {
     var ytList: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                if settings.youTubeMode == 0 {
-                    // Sidebar is hidden in full-bleed: this is the way back out.
-                    Button {
-                        settings.musicSidebarCollapsed = false
-                        settings.youTubeMode = 1
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Back to sources")
-                }
-                Picker("", selection: $settings.youTubeMode) {
-                    Text("Site").tag(0)
-                    Text("List").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-                .frame(maxWidth: 220)
                 if settings.youTubeMode == 0 {
                     Button { YTWebPlayer.shared.goBack() } label: { Image(systemName: "chevron.left") }
                         .buttonStyle(.plain).font(.body)
@@ -378,7 +365,6 @@ struct MusicHubView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { yt.play(t) }
-                .onHover { hovering in if hovering { yt.prefetch(t.id) } }
             }.listStyle(.plain).frame(maxHeight: .infinity)
         }
     }
@@ -453,6 +439,11 @@ struct MusicHubView: View {
             history.record(title: name, source: src)
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, trimmed != "open", trimmed != "closed" else { return }
+            // Don't steal the strip: peeking at the Spotify/Apple tab must not
+            // overwrite Local/YouTube/Web playback display. Only publish when
+            // the user pressed a remote button (markPlaying) or this source
+            // already owns the strip.
+            guard markPlaying || music.source == src else { return }
             // AppleScript returns "Track — Artist"; accept common dash variants.
             var track = trimmed
             var artist = ""
@@ -553,7 +544,11 @@ final class ResizeCursorRectView: NSView {
 struct ResizeCursorView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ResizeCursorRectView() }
     func updateNSView(_ nsView: NSView, context: Context) {
+        // Re-establish the ↔ cursor rect (discard + reset cycle). Calling
+        // discardCursorRects() alone orphaned the rect after the first SwiftUI
+        // update, losing the resize cursor until relaunch.
         nsView.discardCursorRects()
+        nsView.window?.invalidateCursorRects(for: nsView)
     }
 }
 
