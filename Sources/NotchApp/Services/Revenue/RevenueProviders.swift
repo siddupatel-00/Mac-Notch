@@ -31,14 +31,13 @@ struct StripeProvider: RevenueProvider {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw RevenueError.httpError }
         let list = try JSONDecoder().decode(StripeBalanceList.self, from: data)
         return list.data.map { txn in
-            let product: String
-            if let d = txn.txnDescription, !d.isEmpty { product = d } else { product = "Stripe payment" }
+            let desc = (txn.txnDescription?.isEmpty == false ? txn.txnDescription! : "Stripe payment")
             return Payment(
                 id: txn.id,
                 provider: "stripe",
                 amount: Double(txn.amount) / 100.0,
                 currency: txn.currency.uppercased(),
-                product: (txn.txnDescription?.isEmpty == false ? txn.txnDescription! : "Stripe payment"),
+                product: desc,
                 customer: "Stripe customer",
                 timestamp: Date(timeIntervalSince1970: txn.created),
                 status: txn.status ?? "succeeded"
