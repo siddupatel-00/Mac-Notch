@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mac-Notch — Native macOS Notch Companion</title>
+  <meta name="description" content="A native macOS utility that transforms your camera notch into a private hub for music, clipboard, timers, and quick tools.">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/png" href="assets/logo.png">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header class="nav-bar">
+    <div class="nav-content">
+      <a href="#" class="brand">
+        <img src="assets/logo.png" alt="Mac-Notch logo" class="brand-logo">
+        <span>Mac-Notch</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#tools">Tools</a>
+        <a href="#source">Open Source</a>
+        <a href="https://github.com/siddupatel-00/Mac-Notch" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+      <div class="nav-actions">
+        <a href="https://github.com/siddupatel-00/Mac-Notch" target="_blank" rel="noopener" class="btn btn-github">
+          <svg class="icon-github" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span class="star-badge">★ Star</span>
+        </a>
+        <button id="theme-toggle" class="btn btn-icon" aria-label="Toggle theme" title="Toggle Light/Dark Mode">
+          <svg class="theme-icon-sun" viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/>
+          </svg>
+          <svg class="theme-icon-moon" viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/>
+          </svg>
+        </button>
+        <a href="https://github.com/siddupatel-00/Mac-Notch/releases/download/v0.1.3/NotchApp.dmg" class="btn btn-primary">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero Section -->
+    <section class="hero">
+      <div class="container hero-content">
+        <h1 class="hero-title">Your MacBook notch.<br>Finally useful.</h1>
+        <p class="hero-sub">A native macOS utility built in Swift and AppKit. Dropdown music controls, quick tools, timers, and clipboard history—tucked directly into your camera notch.</p>
+        
+        <div class="hero-cta-group">
+          <a href="https://github.com/siddupatel-00/Mac-Notch/releases/download/v0.1.3/NotchApp.dmg" class="btn btn-hero-primary">
+            <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+              <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+            </svg>
+            Download NotchApp v0.1.3 (.dmg)
+          </a>
+          <a href="https://github.com/siddupatel-00/Mac-Notch" target="_blank" rel="noopener" class="btn btn-hero-secondary">
+            <svg class="icon-github" viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+        <p class="hero-notes">v0.1.3 · Free & Open Source · Universal Binary · Zero Telemetry</p>
+        
+        <!-- Hero Video Demo -->
+        <div class="hero-video-wrapper">
+          <div class="video-container">
+            <video autoplay loop muted playsinline controls class="hero-video">
+              <source src="assets/demo.mp4" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tools Section -->
+    <section id="tools" class="section">
+      <div class="container">
+        <h2 class="section-title">Built-in Tools</h2>
+        <p class="section-sub">19 native utilities right in your notch. Turn any tool on or off in Settings.</p>
+
+        <div class="tools-grid">
+          <!-- Home -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(0, 113, 227, 0.12); color: #2997ff;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Home</h4>
+              <p>Now playing, your next event, and a quick tool launcher</p>
+            </div>
+          </div>
+
+          <!-- Revenue -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(52, 199, 89, 0.12); color: #34c759;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+                <polyline points="17 6 23 6 23 12"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Revenue</h4>
+              <p>Live Stripe, Polar, and Lemon Squeezy takings in the notch</p>
+            </div>
+          </div>
+
+          <!-- Music -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(255, 45, 85, 0.12); color: #ff2d55;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/>
+                <circle cx="18" cy="16" r="3"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Music</h4>
+              <p>YouTube Music, Spotify, and Apple Music with background playback</p>
+            </div>
+          </div>
+
+          <!-- Scratchpad -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(255, 149, 0, 0.12); color: #ff9500;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Scratchpad</h4>
+              <p>One always-there text box, instantly accessible anytime</p>
+            </div>
+          </div>
+
+          <!-- Shelf -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(90, 200, 250, 0.12); color: #5ac8fa;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 8v13H3V8"/>
+                <path d="M1 3h22v5H1z"/>
+                <path d="M10 12h4"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Shelf</h4>
+              <p>Drag files in, drop them anywhere else later</p>
+            </div>
+          </div>
+
+          <!-- Calendar -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(255, 59, 48, 0.12); color: #ff3b30;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Calendar</h4>
+              <p>Agenda and custom reminders you can tick off</p>
+            </div>
+          </div>
+
+          <!-- Timers -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(255, 159, 10, 0.12); color: #ff9f0a;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Timers & Clock</h4>
+              <p>Pomodoro, countdown, stopwatch, and custom alarm alerts</p>
+            </div>
+          </div>
+
+          <!-- Stats -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(175, 82, 222, 0.12); color: #af52de;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2"/>
+                <rect x="9" y="9" width="6" height="6"/>
+                <line x1="9" y1="1" x2="9" y2="4"/>
+                <line x1="15" y1="1" x2="15" y2="4"/>
+                <line x1="9" y1="20" x2="9" y2="23"/>
+                <line x1="15" y1="20" x2="15" y2="23"/>
+                <line x1="20" y1="9" x2="23" y2="9"/>
+                <line x1="20" y1="14" x2="23" y2="14"/>
+                <line x1="1" y1="9" x2="4" y2="9"/>
+                <line x1="1" y1="14" x2="4" y2="14"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Stats</h4>
+              <p>Real-time CPU load, memory, disk, and battery usage</p>
+            </div>
+          </div>
+
+          <!-- Screen Time -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(88, 86, 214, 0.12); color: #5856d6;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 22h14"/>
+                <path d="M5 2h14"/>
+                <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/>
+                <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Screen Time</h4>
+              <p>Where the day went, tracked app by app</p>
+            </div>
+          </div>
+
+          <!-- Weather -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(48, 176, 199, 0.12); color: #30b0c7;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Weather</h4>
+              <p>Current conditions and forecast powered by Open-Meteo</p>
+            </div>
+          </div>
+
+          <!-- Clipboard -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(162, 132, 94, 0.12); color: #a2845e;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Clipboard</h4>
+              <p>Searchable history of your recent clips and text</p>
+            </div>
+          </div>
+
+          <!-- Claude Projects -->
+          <div class="tool-card">
+            <div class="tool-icon-box" style="background: rgba(204, 120, 92, 0.12); color: #cc785c;">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 0 0 5 0"/>
+              </svg>
+            </div>
+            <div class="tool-info">
+              <h4>Claude</h4>
+              <p>Browse and quickly jump into your local Claude projects</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Open Source & Local Build -->
+    <section id="source" class="section">
+      <div class="container">
+        <div class="oss-banner">
+          <div class="oss-info">
+            <h2>100% Free & Open Source</h2>
+            <p>No subscriptions. No license checks. No trackers. Star the repository on GitHub to support the project.</p>
+            <div class="oss-links">
+              <a href="https://github.com/siddupatel-00/Mac-Notch" target="_blank" rel="noopener" class="btn btn-hero-primary">
+                <svg class="icon-github" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                Star on GitHub
+              </a>
+              <a href="https://github.com/siddupatel-00/Mac-Notch/releases/download/v0.1.3/NotchApp.zip" class="btn btn-hero-secondary">
+                Download App (.zip)
+              </a>
+            </div>
+          </div>
+          <div class="oss-code">
+            <div class="code-header">
+              <div class="code-dots">
+                <span class="code-dot red"></span>
+                <span class="code-dot yellow"></span>
+                <span class="code-dot green"></span>
+                <span class="code-title">Terminal — Build from source</span>
+              </div>
+              <button id="copy-btn" class="btn-copy" title="Copy code" aria-label="Copy code">
+                <svg class="copy-icon" viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+                  <path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/>
+                </svg>
+                <svg class="check-icon" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" style="display:none;">
+                  <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/>
+                </svg>
+                <span class="copy-label">Copy</span>
+              </button>
+            </div>
+            <pre><code id="code-snippet"><span class="comment"># Clone and build directly on your Mac</span>
+git clone https://github.com/siddupatel-00/Mac-Notch.git
+cd Mac-Notch
+./Scripts/make-app.sh
+open dist/NotchApp.app</code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-content">
+      <div class="footer-meta">
+        <p>Mac-Notch is an independent open-source project released under the <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noopener">MIT License</a>.</p>
+        <p>macOS, MacBook, and Swift are trademarks of Apple Inc.</p>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/siddupatel-00/Mac-Notch" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/siddupatel-00/Mac-Notch/issues" target="_blank" rel="noopener">Report Issue</a>
+        <a href="https://github.com/siddupatel-00/Mac-Notch/releases" target="_blank" rel="noopener">Releases</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Theme & Copy Scripts -->
+  <script>
+    // Theme toggle (Default to user's system preference)
+    const toggleBtn = document.getElementById('theme-toggle');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+    
+    function getInitialTheme() {
+      const stored = localStorage.getItem('theme');
+      if (stored) return stored;
+      return prefersDark.matches ? 'dark' : 'light';
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('theme', theme);
+    }
+
+    // Initialize
+    applyTheme(getInitialTheme());
+
+    toggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+    });
+
+    // Listen to system changes if user hasn't manually overridden
+    prefersDark.addEventListener('change', (e) => {
+      if (!localStorage.getItem('theme')) {
+        applyTheme(e.matches ? 'dark' : 'light');
+      }
+    });
+
+    // Copy to clipboard
+    const copyBtn = document.getElementById('copy-btn');
+    const copyIcon = copyBtn.querySelector('.copy-icon');
+    const checkIcon = copyBtn.querySelector('.check-icon');
+    const copyLabel = copyBtn.querySelector('.copy-label');
+    const codeToCopy = `git clone https://github.com/siddupatel-00/Mac-Notch.git\ncd Mac-Notch\n./Scripts/make-app.sh\nopen dist/NotchApp.app`;
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(codeToCopy);
+        copyIcon.style.display = 'none';
+        checkIcon.style.display = 'inline';
+        copyLabel.textContent = 'Copied!';
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyIcon.style.display = 'inline';
+          checkIcon.style.display = 'none';
+          copyLabel.textContent = 'Copy';
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      } catch (err) {
+        console.error('Failed to copy', err);
+      }
+    });
+  </script>
+</body>
+</html>
