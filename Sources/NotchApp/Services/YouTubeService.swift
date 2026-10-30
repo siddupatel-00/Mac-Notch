@@ -68,8 +68,7 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
     init() {
         if let data = UserDefaults.standard.data(forKey: cacheKey),
            let dict = try? JSONDecoder().decode([String: CacheEntry].self, from: data) {
-            let now = Date()
-            for (id, e) in dict where now.timeIntervalSince(e.at) < 5 * 3600 {
+            for (id, e) in dict where Self.isFresh(url: e.url, at: e.at) {
                 urlCache[id] = (e.url, e.at)
             }
         }
@@ -77,20 +76,67 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
 
     private struct CacheEntry: Codable { var url: String; var at: Date }
 
+    /// googlevideo URLs carry an `expire` epoch. Past it the CDN returns 403,
+    /// which used to leave a dead URL cached for the full 5h window.
+    private static func expiry(of url: URL) -> Date? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let raw = comps.queryItems?.first(where: { $0.name == "expire" })?.value,
+              let secs = TimeInterval(raw) else { return nil }
+        return Date(timeIntervalSince1970: secs)
+    }
+
+    /// Reject entries that are old, expired, or about to expire.
+    private static func isFresh(url: String, at: Date) -> Bool {
+        guard Date().timeIntervalSince(at) < 5 * 3600, let u = URL(string: url) else { return false }
+        if let exp = expiry(of: u) { return Date().addingTimeInterval(120) < exp }
+        return true
+    }
+
+    private static func isUsable(_ url: URL) -> Bool {
+        if let exp = expiry(of: url) { return Date().addingTimeInterval(120) < exp }
+        return true
+    }
+
     private func cachedURL(_ id: String) -> URL? {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        guard let c = urlCache[id],
-              Date().timeIntervalSince(c.at) < 5 * 3600,
-              let url = URL(string: c.url) else { return nil }
+        guard let c = urlCache[id] else { cacheLock.unlock(); return nil }
+        guard Self.isFresh(url: c.url, at: c.at), let url = URL(string: c.url) else {
+            urlCache.removeValue(forKey: id)
+            cacheLock.unlock()
+            persistCache()
+            return nil
+        }
+        cacheLock.unlock()
         return url
     }
 
     private func storeURL(_ id: String, _ url: URL) {
+        // Never cache a URL that is already expired (or expires within 2 min).
+        guard Self.isUsable(url) else { return }
         cacheLock.lock()
         urlCache[id] = (url.absoluteString, Date())
         let dict = urlCache.mapValues { CacheEntry(url: $0.url, at: $0.at) }
         cacheLock.unlock()
+        persist(dict)
+    }
+
+    /// Drop a stale stream URL so the next resolve hits yt-dlp again.
+    func invalidate(_ id: String) {
+        cacheLock.lock()
+        urlCache.removeValue(forKey: id)
+        let dict = urlCache.mapValues { CacheEntry(url: $0.url, at: $0.at) }
+        cacheLock.unlock()
+        persist(dict)
+    }
+
+    private func persistCache() {
+        cacheLock.lock()
+        let dict = urlCache.mapValues { CacheEntry(url: $0.url, at: $0.at) }
+        cacheLock.unlock()
+        persist(dict)
+    }
+
+    private func persist(_ dict: [String: CacheEntry]) {
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: cacheKey)
         }
@@ -112,7 +158,9 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
         task.arguments = args
         let pipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe()
+        // Discard stderr: yt-dlp can be chatty, and an undrained pipe can fill
+        // its 64 KB buffer and block the child forever.
+        task.standardError = FileHandle.nullDevice
         genLock.lock()
         activeProc = task
         genLock.unlock()
@@ -140,12 +188,15 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
 
     /// Recent searches: repeat queries return instantly.
     private var searchCache: [String: [YTEntry]] = [:]
+    private var searchGen = 0
 
     func search(_ q: String) {
         let query = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         lastQuery = query
         suggestions = []
+        searchGen += 1
+        let gen = searchGen
         _ = bumpPrefetchGen() // new search invalidates older queued prefetches (not playback)
         if let hit = searchCache[query.lowercased()], !hit.isEmpty {
             searching = false
@@ -164,16 +215,21 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
                     YTEntry(id: $0.id, title: $0.title, artist: $0.artist, duration: $0.durationSecs, thumb: $0.thumb)
                 }
                 await MainActor.run {
+                    // A slow, older query must not overwrite newer results.
+                    guard self.searchGen == gen else { return }
                     self.searching = false
                     self.results = entries
                     self.failed = entries.isEmpty
+                    if !entries.isEmpty {
+                        self.searchCache[query.lowercased()] = entries
+                        if self.searchCache.count > 20 { self.searchCache.removeValue(forKey: self.searchCache.keys.first ?? "") }
+                    }
                 }
-                if !entries.isEmpty {
-                    self.searchCache[query.lowercased()] = entries
-                }
-                // Prefetch the top 6 streams through the single lane (stale ones
+                guard !entries.isEmpty else { return }
+                // Prefetch the top 3 streams through the single lane (stale ones
                 // evaporate via generation check): tapping any then plays instantly.
-                let tops = Array(entries.prefix(6).filter { self.cachedURL($0.id) == nil })
+                // Kept small so queued previews never block a tap you just made.
+                let tops = Array(entries.prefix(3).filter { self.cachedURL($0.id) == nil })
                 let pg = self.bumpPrefetchGen()
                 for t in tops {
                     self.lane.async { [weak self] in
@@ -182,7 +238,11 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
                     }
                 }
             } catch {
-                await MainActor.run { self.searching = false; self.failed = true }
+                await MainActor.run {
+                    guard self.searchGen == gen else { return }
+                    self.searching = false
+                    self.failed = true
+                }
             }
         }
     }
@@ -273,7 +333,8 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
         args.append("https://www.youtube.com/watch?v=\(id)")
         guard let out = launch(args, timeout: 45),
               let first = out.components(separatedBy: "\n").first(where: { $0.hasPrefix("http") }),
-              let url = URL(string: first.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+              let url = URL(string: first.trimmingCharacters(in: .whitespacesAndNewlines)),
+              Self.isUsable(url) else {
             return nil
         }
         storeURL(id, url)
@@ -285,9 +346,10 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
         playId(e.id, title: e.title, artist: e.artist, duration: e.duration)
     }
 
-    func playId(_ id: String, title: String, artist: String = "", duration: Double = 0) {
-        // Cache hit = instant play, no resolve wait.
-        if let url = cachedURL(id) {
+    func playId(_ id: String, title: String, artist: String = "", duration: Double = 0, retrying: Bool = false) {
+        // Cache hit = instant play, no resolve wait. A retry deliberately skips
+        // the cache: the URL that just failed must not be chosen again.
+        if !retrying, let url = cachedURL(id) {
             MusicService.shared.currentAudioId = id
             MusicService.shared.play(url: url, title: title,
                                      sub: artist.isEmpty ? "YouTube" : artist,
@@ -295,6 +357,7 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
             if duration > 0 { MusicService.shared.trackLength = duration }
             return
         }
+        if retrying { invalidate(id) }
         // Stop the old song FIRST: otherwise its audio keeps playing under the
         // new title while we resolve (ghost playback). Then take the single lane:
         // TERMINATE anything still resolving, so this tap owns the one process.
@@ -302,6 +365,7 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
         terminateActive()
         DispatchQueue.main.async {
             MusicService.shared.stopAppPlayback()
+            MusicService.shared.currentAudioId = id
             MusicService.shared.title = title
             MusicService.shared.subtitle = "Resolving audio…"
             MusicService.shared.source = "YouTube"
@@ -322,7 +386,7 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
                 MusicService.shared.currentAudioId = id
                 MusicService.shared.play(url: url, title: title,
                                          sub: artist.isEmpty ? "YouTube" : artist,
-                                         source: "YouTube", audioId: "yt:\(id)")
+                                         source: "YouTube", audioId: "yt:\(id)", isRetry: retrying)
                 if duration > 0 { MusicService.shared.trackLength = duration }
             }
         }

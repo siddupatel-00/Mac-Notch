@@ -25,22 +25,42 @@ final class MusicService: ObservableObject {
     @Published var title = "Nothing playing"
     @Published var subtitle = "Pick a source below"
     @Published var source = "Local"
-    @Published var volume: Float = UserDefaults.standard.object(forKey: "musicVolume") as? Float ?? 0.8 {
+    @Published var volume: Float = MusicService.storedVolume() {
         didSet {
-            let v = min(1, max(0, volume))
-            if v != volume { volume = v; return }
-            UserDefaults.standard.set(v, forKey: "musicVolume")
-            player?.volume = v
-            YTWebPlayer.shared.setWebVolume(v)
+            if volume < 0 { volume = 0; return }
+            if volume > 1 { volume = 1; return }
+            UserDefaults.standard.set(volume, forKey: "musicVolume")
+            player?.volume = volume
+            YTWebPlayer.shared.setWebVolume(volume)
         }
+    }
+
+    private static func storedVolume() -> Float {
+        // UserDefaults stores Float as an NSNumber, which does not reliably
+        // bridge to Float on every macOS version. Read a Double and fall back
+        // to a sane default instead of silently muting the app.
+        let d = UserDefaults.standard
+        guard d.object(forKey: "musicVolume") != nil else { return 0.8 }
+        return min(1, max(0, Float(d.double(forKey: "musicVolume"))))
     }
 
     /// Currently playing stream id (YouTube navigation).
     var currentAudioId: String?
     /// True when the user asked the site to play (strip/media keys/next).
     /// The watchdog auto-resumes only in this state — a deliberate user pause
-    /// is never overridden.
-    var expectingWebPlay = false
+    /// is never overridden. The deadline keeps a stale intent from resurrecting
+    /// a song minutes later (e.g. after the track ended on the site).
+    var expectingWebPlay = false {
+        didSet {
+            webPlayDeadline = expectingWebPlay ? Date().addingTimeInterval(12) : nil
+        }
+    }
+    private(set) var webPlayDeadline: Date?
+
+    var canAutoResumeWeb: Bool {
+        guard expectingWebPlay, let deadline = webPlayDeadline else { return false }
+        return Date() < deadline
+    }
 
     private var player: AVPlayer?
     private var localTracks: [URL] = []
@@ -55,6 +75,8 @@ final class MusicService: ObservableObject {
     private var stallTicks = 0
     private var lastPos: Double = -1
     private var playToken = 0
+    private var endHandledToken = -1
+    private var didRetryStream = false
     private var preloadedNext = false
     // Repeat + shuffle (persisted)
     @Published var repeatMode: RepeatMode = RepeatMode(rawValue: UserDefaults.standard.string(forKey: "repeatMode") ?? "off") ?? .off {
@@ -73,7 +95,9 @@ final class MusicService: ObservableObject {
         refreshDurations()
         // End-of-track → repeat/shuffle/off behavior.
         // NOTE: the token MUST be retained or the observation silently dies.
-        endObserver = NotificationCenter.default.addObserver(forName: Notification.Name("AVPlayerItemDidPlayToEndNotification"), object: nil, queue: .main) { [weak self] note in
+        // AVPlayerItem.didPlayToEndTimeNotification is the real notification name;
+        // the old string literal ("AVPlayerItemDidPlayToEndNotification") never fired.
+        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: nil, queue: .main) { [weak self] note in
             guard let self,
                   let ended = note.object as? AVPlayerItem,
                   ended == self.player?.currentItem else { return }
@@ -108,7 +132,13 @@ final class MusicService: ObservableObject {
         p.allowsMultipleSelection = true
         p.allowedContentTypes = [.mp3, .mpeg4Audio, .wav, .aiff]
         guard p.runModal() == .OK else { return }
-        localTracks += p.urls
+        // Importing the same folder twice used to duplicate every row.
+        let existing = Set(localTracks.map(\.standardizedFileURL))
+        let newTracks = p.urls
+            .map(\.standardizedFileURL)
+            .filter { !existing.contains($0) }
+        guard !newTracks.isEmpty else { return }
+        localTracks += newTracks
         UserDefaults.standard.set(localTracks.map(\.absoluteString), forKey: "localMusic")
         refreshDurations()
     }
@@ -122,10 +152,12 @@ final class MusicService: ObservableObject {
     var localNames: [String] { localTracks.map(\.lastPathComponent) }
 
     // MARK: Generic play (local files + open streams). Sole audio source: stops everything else.
-    func play(url: URL, title: String, sub: String, source: String, localURL: URL? = nil, audioId: String? = nil) {
+    func play(url: URL, title: String, sub: String, source: String, localURL: URL? = nil, audioId: String? = nil, isRetry: Bool = false) {
         stopAppPlayback()
         silenceExternalApps()
         YTWebPlayer.shared.pauseWeb()
+        currentAudioId = audioId.map { $0.hasPrefix("yt:") ? String($0.dropFirst(3)) : $0 }
+        didRetryStream = isRetry
         let item = AVPlayerItem(url: url)
         if player == nil {
             player = AVPlayer()
@@ -147,7 +179,7 @@ final class MusicService: ObservableObject {
                 guard self.isPlaying else { self.stallTicks = 0; return }
                 if self.player?.currentItem?.status == .failed {
                     self.stallTicks = 0
-                    self.isPlaying = false
+                    self.handleStreamFailure()
                     return
                 }
                 if self.trackLength > 0, pos >= self.trackLength - 0.25 {
@@ -169,20 +201,22 @@ final class MusicService: ObservableObject {
                 if self.trackLength > 0, self.trackLength - pos < 5 {
                     self.trackEnded()
                 } else if pos > 5 {
-                    self.isPlaying = false
+                    self.handleStreamFailure()
                 }
             }
         }
         player?.replaceCurrentItem(with: item)
         player?.volume = volume
-        // Start fast instead of pre-buffering: streams begin in ~1s on decent nets.
-        player?.automaticallyWaitsToMinimizeStalling = false
+        // Let AVPlayer build a small safety buffer. The old "start instantly"
+        // setting made a weak connection stall a few seconds in and never recover.
+        player?.automaticallyWaitsToMinimizeStalling = true
         player?.play()
         position = 0
         lastPos = -1
         stallTicks = 0
         preloadedNext = false
         playToken += 1
+        endHandledToken = -1
         let gen = playToken
         if let known = durations[url.absoluteString] {
             trackLength = known
@@ -236,7 +270,23 @@ final class MusicService: ObservableObject {
         }
         if isPlaying { player?.pause(); isPlaying = false }
         else {
-            if player?.currentItem != nil { player?.play(); isPlaying = true }
+            if player?.currentItem != nil {
+                // A finished item sits at its end: play() alone is silent.
+                if trackLength > 0, position >= trackLength - 0.5 {
+                    player?.seek(to: .zero)
+                    position = 0
+                    lastPos = -1
+                    playToken += 1
+                    endHandledToken = -1
+                }
+                player?.play()
+                isPlaying = true
+            }
+            else if source == "YouTube", let id = currentAudioId {
+                // Player was torn down (stream failure / relaunch) but the
+                // selection is still known: resolve and start it again.
+                YouTubeService.shared.playId(id, title: title, artist: subtitle, duration: trackLength)
+            }
             else if !localTracks.isEmpty { playLocal(at: localIndex) }
         }
         RemoteCommands.refresh()
@@ -246,7 +296,20 @@ final class MusicService: ObservableObject {
     var hasPlayable: Bool { player?.currentItem != nil || !localTracks.isEmpty || ((source == "Spotify" || source == "Apple") && title != "Nothing playing") || source == "YouTube Web" }
     func resume() {
         if source == "YouTube Web" { expectingWebPlay = true; YTWebPlayer.shared.playWeb(); return }
-        if player?.currentItem != nil { player?.play(); isPlaying = true }
+        if player?.currentItem != nil {
+            if trackLength > 0, position >= trackLength - 0.5 {
+                player?.seek(to: .zero)
+                position = 0
+                lastPos = -1
+                playToken += 1
+                endHandledToken = -1
+            }
+            player?.play()
+            isPlaying = true
+        }
+        else if source == "YouTube", let id = currentAudioId {
+            YouTubeService.shared.playId(id, title: title, artist: subtitle, duration: trackLength)
+        }
         else if !localTracks.isEmpty { playLocal(at: localIndex) }
         RemoteCommands.refresh()
     }
@@ -263,7 +326,36 @@ final class MusicService: ObservableObject {
     func stopAppPlayback() {
         player?.pause()
         expectingWebPlay = false
+        currentAudioId = nil
+        didRetryStream = false
         DispatchQueue.main.async { self.isPlaying = false }
+    }
+
+    /// A cached googlevideo URL can expire or go stale (403 / frozen clock).
+    /// Drop it and re-resolve the same video exactly once; a second failure
+    /// stops cleanly instead of looping the resolver forever.
+    private func handleStreamFailure() {
+        guard source == "YouTube", let id = currentAudioId, !id.contains(":") else {
+            player?.pause()
+            isPlaying = false
+            RemoteCommands.refresh()
+            return
+        }
+        guard !didRetryStream else {
+            didRetryStream = false
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            isPlaying = false
+            subtitle = "Stream expired — tap play to retry"
+            RemoteCommands.refresh()
+            return
+        }
+        didRetryStream = true
+        let curTitle = title
+        let curArtist = subtitle
+        let length = trackLength
+        YouTubeService.shared.invalidate(id)
+        YouTubeService.shared.playId(id, title: curTitle, artist: curArtist, duration: length, retrying: true)
     }
 
     // MARK: Spotify + Apple Music remote (AppleScript, no keys)
@@ -437,6 +529,10 @@ final class MusicService: ObservableObject {
         defer { RemoteCommands.refresh() }
         // AV end events are meaningless while the site owns playback.
         guard source != "YouTube Web" else { return }
+        // The periodic observer and the notification both fire near the end;
+        // handle a given play exactly once so repeat-one can't double-start.
+        guard playToken != endHandledToken else { return }
+        endHandledToken = playToken
         switch source {
         case "Local":
             guard !localTracks.isEmpty else { isPlaying = false; return }
@@ -517,7 +613,8 @@ final class PlayHistoryStore: ObservableObject {
     func replay(_ e: HistoryEntry) {
         if let aid = e.audioId {
             // YouTube watch id (yt:…) or legacy open-stream id (au:…).
-            let vid = aid.hasPrefix("yt:") ? String(aid.dropFirst(3)) : aid
+            var vid = aid
+            if aid.hasPrefix("yt:") || aid.hasPrefix("au:") { vid = String(aid.dropFirst(3)) }
             if aid.hasPrefix("au:"),
                let url = URL(string: "https://discoveryprovider.audius.co/v1/tracks/\(vid)/stream?app_name=NotchApp") {
                 MusicService.shared.play(url: url, title: e.title, sub: "Stream", source: "YouTube", audioId: aid)
