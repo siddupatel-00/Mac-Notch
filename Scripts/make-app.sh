@@ -33,7 +33,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleName</key><string>NotchApp</string>
 <key>CFBundleIdentifier</key><string>com.local.notchapp</string>
-<key>CFBundleVersion</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>0.1.3</string>
+<key>CFBundleVersion</key><string>0.1.3</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleExecutable</key><string>NotchApp</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -51,3 +52,16 @@ PLIST
 codesign --force --deep --sign - "$APP_BUNDLE"
 
 echo "Built and signed $APP_BUNDLE"
+
+# Build DMG with Drag-to-Applications symlink
+DMG_STAGING="dist/dmg_staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+hdiutil create -volname "NotchApp" -srcfolder "$DMG_STAGING" -ov -format UDZO dist/NotchApp.dmg
+rm -rf "$DMG_STAGING"
+
+# Build ZIP archive
+ditto -c -k --keepParent "$APP_BUNDLE" dist/NotchApp.zip
+echo "Created dist/NotchApp.dmg and dist/NotchApp.zip"
