@@ -47,4 +47,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 
-echo "Built $APP_BUNDLE"
+# Ad-hoc sign the entire app bundle (seals Info.plist & Resources)
+codesign --force --deep --sign - "$APP_BUNDLE"
+
+echo "Built and signed $APP_BUNDLE"
