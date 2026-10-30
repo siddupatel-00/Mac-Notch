@@ -5,7 +5,7 @@ import Combine
 /// pmset + FileManager I/O run on a background queue; @Published updates hop to main.
 final class StatsProvider: ObservableObject {
     static let shared = StatsProvider()
-    @Published var cpu: Double = 12
+    @Published var cpu: Double = 0
     @Published var memUsedGB: Double = 6.2
     @Published var memTotalGB: Double = 16
     @Published var diskUsedPct: Double = 42
@@ -64,14 +64,47 @@ final class StatsProvider: ObservableObject {
                 }
             } catch { /* keep last value */ }
 
-            let cpuSample = Double.random(in: 8...28)
+            let cpuSample = self.cpuUsage()
             DispatchQueue.main.async {
                 self.inFlight = false
-                self.cpu = cpuSample
+                if let cpuSample { self.cpu = cpuSample }
                 if memUsed > 0 { self.memUsedGB = memUsed }
                 if diskPct > 0 { self.diskUsedPct = diskPct }
                 if batt >= 0 { self.batteryPct = batt }
             }
         }
+    }
+
+    /// Real CPU load from host_processor_info deltas (the old value was random).
+    private var lastCPUTicks: (busy: UInt64, total: UInt64)?
+
+    private func cpuUsage() -> Double? {
+        var cpuCount: natural_t = 0
+        var info: processor_info_array_t?
+        var infoCount: mach_msg_type_number_t = 0
+        let result = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
+                                         &cpuCount, &info, &infoCount)
+        guard result == KERN_SUCCESS, let info else { return nil }
+        defer {
+            vm_deallocate(mach_task_self_,
+                          vm_address_t(bitPattern: info),
+                          vm_size_t(infoCount) * vm_size_t(MemoryLayout<integer_t>.size))
+        }
+        var busy: UInt64 = 0
+        var total: UInt64 = 0
+        for i in 0..<Int(cpuCount) {
+            let base = i * Int(CPU_STATE_MAX)
+            let user = UInt64(max(0, Int(info[base + Int(CPU_STATE_USER)])))
+            let system = UInt64(max(0, Int(info[base + Int(CPU_STATE_SYSTEM)])))
+            let nice = UInt64(max(0, Int(info[base + Int(CPU_STATE_NICE)])))
+            let idle = UInt64(max(0, Int(info[base + Int(CPU_STATE_IDLE)])))
+            busy += user + system + nice
+            total += user + system + nice + idle
+        }
+        let prev = lastCPUTicks
+        lastCPUTicks = (busy, total)
+        guard let prev, total > prev.total else { return nil }
+        let used = Double(busy - prev.busy) / Double(total - prev.total) * 100
+        return min(100, max(0, used))
     }
 }

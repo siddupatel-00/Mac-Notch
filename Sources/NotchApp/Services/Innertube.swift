@@ -40,13 +40,21 @@ enum Innertube {
             for s in list {
                 guard let items = (s["itemSectionRenderer"] as? [String: Any])?["contents"] as? [[String: Any]] else { continue }
                 for it in items {
-                    guard let r = it["musicResponsiveListItemRenderer"] as? [String: Any],
-                          let playBtn = (((r["overlay"] as? [String: Any])?["musicItemThumbnailOverlayRenderer"] as? [String: Any])?["content"] as? [String: Any])?["musicPlayButtonRenderer"] as? [String: Any],
-                          let endpoint = playBtn["playNavigationEndpoint"] as? [String: Any],
-                          let watch = endpoint["watchEndpoint"] as? [String: Any],
-                          let vid = watch["videoId"] as? String,
-                          !vid.isEmpty else { continue }
-                    let atv = (((watch["watchEndpointMusicSupportedConfigs"] as? [String: Any])?["watchEndpointMusicConfig"] as? [String: Any])?["musicVideoType"] as? String) == "MUSIC_VIDEO_TYPE_ATV"
+                    guard let r = it["musicResponsiveListItemRenderer"] as? [String: Any] else { continue }
+                    // Newer responses do not always carry the overlay play
+                    // button; fall back to the row's own watch/playlist data.
+                    var watch: [String: Any]? = ((((r["overlay"] as? [String: Any])?["musicItemThumbnailOverlayRenderer"] as? [String: Any])?["content"] as? [String: Any])?["musicPlayButtonRenderer"] as? [String: Any])?["playNavigationEndpoint"] as? [String: Any]
+                    watch = watch?["watchEndpoint"] as? [String: Any]
+                    var vid = watch?["videoId"] as? String
+                    if vid == nil {
+                        watch = ((r["navigationEndpoint"] as? [String: Any])?["watchEndpoint"] as? [String: Any])
+                        vid = watch?["videoId"] as? String
+                    }
+                    if vid == nil {
+                        vid = (r["playlistItemData"] as? [String: Any])?["videoId"] as? String
+                    }
+                    guard let vid, !vid.isEmpty else { continue }
+                    let atv = (((watch?["watchEndpointMusicSupportedConfigs"] as? [String: Any])?["watchEndpointMusicConfig"] as? [String: Any])?["musicVideoType"] as? String) == "MUSIC_VIDEO_TYPE_ATV"
                     let cols = (r["flexColumns"] as? [[String: Any]]) ?? []
                     func runs(_ i: Int) -> String {
                         guard cols.count > i,

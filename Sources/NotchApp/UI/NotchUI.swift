@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct NotchRootView: View {
     @EnvironmentObject var manager: NotchManager
@@ -46,18 +47,26 @@ struct ExpandedView: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var manager: NotchManager
+    @Environment(\.openSettings) private var openSettings
     @ObservedObject private var revenue = RevenueStore.shared
 
     var visibleTools: [ToolDef] {
         ToolRegistry.all.filter { settings.isEnabled($0.id) }
     }
 
+    /// A disabled tool must never stay selected (it used to render an empty
+    /// panel with no icon highlighted).
+    var activeTool: String {
+        settings.selectedTool != "home" && !settings.isEnabled(settings.selectedTool)
+            ? "home" : settings.selectedTool
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(settings.selectedTool == "home"
+                Text(activeTool == "home"
                      ? "Notch"
-                     : (ToolRegistry.all.first(where: { $0.id == settings.selectedTool })?.name ?? "Notch"))
+                     : (ToolRegistry.all.first(where: { $0.id == activeTool })?.name ?? "Notch"))
                     .bold().foregroundColor(theme.accent)
                 Spacer()
                 Button(action: { manager.resetSize() }) {
@@ -66,6 +75,14 @@ struct ExpandedView: View {
                 Button(action: { manager.toggleFullscreen() }) {
                     Image(systemName: manager.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").foregroundColor(.secondary)
                 }.buttonStyle(.plain)
+                Button(action: {
+                    // Accessory apps have no app menu, so this gear is the only
+                    // way into Settings. Bring the app forward first.
+                    NSApp.activate(ignoringOtherApps: true)
+                    openSettings()
+                }) {
+                    Image(systemName: "gearshape").foregroundColor(.secondary)
+                }.buttonStyle(.plain).help("Settings")
                 Button(action: { manager.collapse() }) {
                     Image(systemName: "chevron.up").foregroundColor(.secondary)
                 }.buttonStyle(.plain)
@@ -80,7 +97,7 @@ struct ExpandedView: View {
 
             // Content
             Group {
-                switch settings.selectedTool {
+                switch activeTool {
                 case "home": HomeTool()
                 case "music": MusicTool()
                 case "revenue": RevenueTool()
@@ -117,7 +134,7 @@ struct ExpandedView: View {
                                     Text(t.name).font(.system(size: 8))
                                 }
                                 .frame(width: 52, height: 44)
-                                .background(settings.selectedTool == t.id ? theme.accent.opacity(0.25) : Color.white.opacity(0.06))
+                                .background(activeTool == t.id ? theme.accent.opacity(0.25) : Color.white.opacity(0.06))
                                 .cornerRadius(10)
                                 .foregroundColor(theme.accent)
                             }.buttonStyle(.plain)

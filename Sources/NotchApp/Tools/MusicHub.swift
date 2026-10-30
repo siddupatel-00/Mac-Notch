@@ -428,22 +428,37 @@ struct MusicHubView: View {
     }
 
     func remote(_ app: String, _ action: String) {
+        // toggle knows the intended state; pause must not be reported as play.
+        // If another source owns the strip, toggling this app starts it.
+        let src = app == "Music" ? "Apple" : app
+        let ownsStrip = music.source == src
+        let willPlay: Bool
+        switch action {
+        case "toggle": willPlay = !ownsStrip || !music.isPlaying
+        case "next", "prev": willPlay = true
+        default: willPlay = music.isPlaying
+        }
         music.control(app: app, action: action)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { fetchTrack(app, markPlaying: true) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            fetchTrack(app, publishing: true, playing: willPlay)
+        }
     }
 
-    func fetchTrack(_ app: String, markPlaying: Bool = false) {
+    func fetchTrack(_ app: String, publishing: Bool = false, playing: Bool = false) {
         let src = app == "Music" ? "Apple" : app
         music.control(app: app, action: "state") { name in
             appTrack = name
-            history.record(title: name, source: src)
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, trimmed != "open", trimmed != "closed" else { return }
+            // Record only a track the user actually started from here. Polling
+            // this tab used to log (and bump play counts for) whatever happened
+            // to be paused in the app.
+            if publishing && playing { history.record(title: trimmed, source: src) }
             // Don't steal the strip: peeking at the Spotify/Apple tab must not
             // overwrite Local/YouTube/Web playback display. Only publish when
-            // the user pressed a remote button (markPlaying) or this source
+            // the user pressed a remote button (publishing) or this source
             // already owns the strip.
-            guard markPlaying || music.source == src else { return }
+            guard publishing || music.source == src else { return }
             // AppleScript returns "Track — Artist"; accept common dash variants.
             var track = trimmed
             var artist = ""
@@ -461,7 +476,7 @@ struct MusicHubView: View {
             music.source = src
             music.trackLength = 0
             music.position = 0
-            if markPlaying { music.isPlaying = true }
+            if publishing { music.isPlaying = playing }
             RemoteCommands.refresh()
         }
     }
@@ -509,7 +524,7 @@ struct MusicHubView: View {
             }
             List(filteredHistory) { e in
                 HStack(spacing: 8) {
-                    if e.audioId != nil || e.localURL != nil {
+                    if canReplay(e) {
                         Button { history.replay(e) } label: { Image(systemName: "play.circle") }.buttonStyle(.plain).font(.body)
                     }
                     VStack(alignment: .leading, spacing: 0) {
@@ -521,9 +536,15 @@ struct MusicHubView: View {
                     if c > 1 { Text("×\(c)").font(.caption2).foregroundStyle(.secondary) }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { history.replay(e) }
+                // Remote-only (Spotify/Apple) rows have nothing to replay; the
+                // old unconditional tap silently did nothing.
+                .onTapGesture { if canReplay(e) { history.replay(e) } }
             }.listStyle(.plain).frame(maxHeight: .infinity)
         }
+    }
+
+    func canReplay(_ e: HistoryEntry) -> Bool {
+        e.audioId != nil || e.videoId != nil || e.localURL != nil
     }
 
     func encoded(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "" }

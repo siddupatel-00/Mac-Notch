@@ -62,7 +62,14 @@ final class NotchManager: ObservableObject {
         if SettingsStore.shared.simulateNotch { hasNotch = true }
     }
 
-    private func mainScreen() -> NSScreen? { NSScreen.main }
+    /// The screen the notch belongs to: the panel's own screen while expanded,
+    /// otherwise the screen under the cursor. Using NSScreen.main everywhere
+    /// opened the panel on the wrong display on multi-monitor setups.
+    private func mainScreen() -> NSScreen? {
+        if isExpanded, let s = panel?.screen { return s }
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+    }
 
     private func loadPersistedSize() {
         let w = UserDefaults.standard.double(forKey: panelWidthKey)
@@ -292,6 +299,9 @@ final class NotchManager: ObservableObject {
     private let openGrace: TimeInterval = 0.8
 
     private func autoCollapse() {
+        // Automatic closes (hover-out, outside click grace) must respect the
+        // user's setting; explicit collapse() calls still work.
+        guard SettingsStore.shared.autoCloseOnLeave else { return }
         guard Date().timeIntervalSince(lastExpandAt) > openGrace else { return }
         collapse()
     }
@@ -367,11 +377,11 @@ final class NotchManager: ObservableObject {
         if let global { outsideTokens.append(global) }
         let esc = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
-            if self.isFullscreen && self.isExpanded && event.keyCode == 53 {
-                DispatchQueue.main.async { self.toggleFullscreen() }
-                return nil
+            guard self.isExpanded, event.keyCode == 53 else { return event }
+            DispatchQueue.main.async {
+                if self.isFullscreen { self.toggleFullscreen() } else { self.collapse() }
             }
-            return event
+            return nil
         }
         if let esc { outsideTokens.append(esc) }
 

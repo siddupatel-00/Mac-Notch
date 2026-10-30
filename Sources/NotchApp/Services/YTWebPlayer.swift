@@ -63,12 +63,27 @@ final class YTWebPlayer: NSObject, ObservableObject {
                 forMainFrameOnly: true
             ))
         }
+        // Autoplay guard: the site used to start a song by itself as soon as the
+        // tab loaded. Real gestures and notch controls opt in; any other
+        // programmatic play is paused immediately.
+        cfg.userContentController.addUserScript(WKUserScript(
+            source: Self.autoplayGuardScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
         // Aggressive ad/tracker blocking at the network layer. Compiles async;
         // if the page beats it, we reload once so rules apply to everything.
         if !Self.debugNoAdBlock {
             Self.applyAdBlock(to: cfg.userContentController) { [weak self] in
-                guard let self, let w = self.web, w.url != nil else { return }
-                w.reload()
+                DispatchQueue.main.async {
+                    guard let self, let w = self.web, w.url != nil else { return }
+                    // Never reload over a song that is already playing: the
+                    // reload restarts it (and used to look like a random song).
+                    guard !self.webIsPlaying,
+                          MusicService.shared.source != "YouTube Web",
+                          !MusicService.shared.expectingWebPlay else { return }
+                    w.reload()
+                }
             }
         }
         let w = WKWebView(frame: NSRect(x: 0, y: 0, width: 8, height: 8), configuration: cfg)
@@ -100,7 +115,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
         // Same level as the notch panel so it is never hidden behind the
         // menu bar / Dock (both of which would re-introduce the occlusion).
         panel.level = .popUpMenu
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = true
         panel.hasShadow = false
         let hold = NSView(frame: NSRect(origin: .zero, size: parkSize))
@@ -207,6 +222,40 @@ final class YTWebPlayer: NSObject, ObservableObject {
     })();
     """
 
+    // MARK: - Autoplay guard
+
+    /// Installed at document start. Media keeps `requiresUserActionForPlayback`
+    /// off so the notch strip can still drive the site, but this blocks any
+    /// play the user did not ask for (page auto-start, ad hand-off, stale
+    /// session restore) until a real gesture or a notch command sets intent.
+    static let autoplayGuardScript = """
+    (function(){
+      window.__notchIntent=false;
+      window.__notchGesture=false;
+      function mark(){window.__notchGesture=true;}
+      ['pointerdown','mousedown','touchstart','keydown'].forEach(function(n){
+        try{window.addEventListener(n,mark,true);}catch(e){}
+      });
+      function allowed(){
+        if(window.__notchIntent||window.__notchGesture)return true;
+        try{if(navigator.userActivation&&navigator.userActivation.isActive)return true;}catch(e){}
+        return false;
+      }
+      window.__notchAllowPlay=function(){window.__notchIntent=true;};
+      window.__notchBlockPlay=function(){window.__notchIntent=false;};
+      document.addEventListener('play',function(e){
+        var v=e.target;
+        if(!v||v.tagName!=='VIDEO')return;
+        if(!allowed()){try{v.pause();}catch(err){}}
+      },true);
+    })();
+    """
+
+    /// Prepended to every notch-initiated control call. Setting the flag
+    /// directly (not just calling the helper) keeps playback working even if
+    /// the guard script itself failed to install.
+    private static let intentJS = "try{window.__notchIntent=true;if(window.__notchAllowPlay)window.__notchAllowPlay();}catch(e){}"
+
     // MARK: - Tab borrowing
 
     /// Move the live view into the tab. Call on appear.
@@ -274,7 +323,15 @@ final class YTWebPlayer: NSObject, ObservableObject {
 
     /// Silence the site (called when AV starts).
     func pauseWeb() {
-        web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v)v.pause();})()", completionHandler: nil)
+        MusicService.shared.expectingWebPlay = false
+        web?.evaluateJavaScript("""
+        (()=>{
+          try{window.__notchIntent=false;if(window.__notchBlockPlay)window.__notchBlockPlay();}catch(e){}
+          \(Self.pickJS)
+          const v=window.__nv();
+          if(v){v.pause();}
+        })()
+        """, completionHandler: nil)
     }
 
     /// Toggle play/pause on the site. Prefer the player-bar button (keeps the
@@ -282,6 +339,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
     func toggleWeb() {
         web?.evaluateJavaScript("""
         (()=>{
+          \(Self.intentJS)
           \(Self.pickJS)
           const b=document.querySelector('ytmusic-player-bar #play-pause-button');
           if(b){b.click();return;}
@@ -296,6 +354,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
     func playWeb() {
         web?.evaluateJavaScript("""
         (()=>{
+          \(Self.intentJS)
           \(Self.pickJS)
           const v=window.__nv();
           // If the site's own button shows "play" (i.e. paused), click it so the
@@ -313,6 +372,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
     func nextWeb() {
         web?.evaluateJavaScript("""
         (()=>{
+          \(Self.intentJS)
           const n=document.querySelector('ytmusic-player-bar .next-button');
           if(n){n.click();}
         })()
@@ -322,6 +382,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
     func prevWeb() {
         web?.evaluateJavaScript("""
         (()=>{
+          \(Self.intentJS)
           const p=document.querySelector('ytmusic-player-bar .previous-button');
           if(p){p.click();}
         })()
@@ -526,12 +587,15 @@ final class YTWebPlayer: NSObject, ObservableObject {
                     m.position = t
                     if dur.isFinite, dur > 0 { m.trackLength = dur }
                     if !m.isPlaying { m.isPlaying = true }
+                    // Playback actually started: disarm the resume watchdog so a
+                    // later pause (user's own, on the site) is never overridden.
+                    if m.expectingWebPlay { m.expectingWebPlay = false }
                     self.pausedStreak = 0
                     if !title.isEmpty { self.lastPlayURL = self.web?.url }
                     if self.resumeAfterLoad {
                         // Page reloaded after a death: press play (autoplay allowed).
                         self.resumeAfterLoad = false
-                        self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
+                        self.web?.evaluateJavaScript("(()=>{\(Self.intentJS)\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
                     }
                     if t != self.lastAdvanceT {
                         self.lastAdvanceT = t
@@ -545,11 +609,11 @@ final class YTWebPlayer: NSObject, ObservableObject {
                         self.frozenTicks += 1
                         if self.frozenTicks == 6 {
                             self.alog("STALL-RESUME at t=\(String(format: "%.1f", t))")
-                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v){try{v.play();}catch(e){}}})()", completionHandler: nil)
+                            self.web?.evaluateJavaScript("(()=>{\(Self.intentJS)\(Self.pickJS)const v=window.__nv();if(v){try{v.play();}catch(e){}}})()", completionHandler: nil)
                         } else if self.frozenTicks >= 12 {
                             self.frozenTicks = 0
                             self.alog("STALL-SEEK at t=\(String(format: "%.1f", t))")
-                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v){try{if(isFinite(v.duration)&&v.duration>0)v.currentTime=Math.min(v.duration,Math.max(0,(v.currentTime||0)+1));v.play();}catch(e){}}})()", completionHandler: nil)
+                            self.web?.evaluateJavaScript("(()=>{\(Self.intentJS)\(Self.pickJS)const v=window.__nv();if(v){try{if(isFinite(v.duration)&&v.duration>0)v.currentTime=Math.min(v.duration,Math.max(0,(v.currentTime||0)+1));v.play();}catch(e){}}})()", completionHandler: nil)
                         }
                     }
                     if !title.isEmpty, title != self.lastWebTitle {
@@ -562,12 +626,12 @@ final class YTWebPlayer: NSObject, ObservableObject {
                     self.frozenTicks = 0
                     // Unexpected stall (not a user pause — those clear the flag):
                     // give it ~6s to recover on its own, then press play.
-                    if m.expectingWebPlay {
+                    if m.canAutoResumeWeb {
                         self.pausedStreak += 1
                         if self.pausedStreak >= 3 {
                             self.pausedStreak = 0
                             self.alog("STALL-RESUME (paused 6s while expected)")
-                            self.web?.evaluateJavaScript("(()=>{\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
+                            self.web?.evaluateJavaScript("(()=>{\(Self.intentJS)\(Self.pickJS)const v=window.__nv();if(v&&v.paused){v.play();}})()", completionHandler: nil)
                         }
                     } else {
                         self.pausedStreak = 0
@@ -621,6 +685,18 @@ final class YTWebPlayer: NSObject, ObservableObject {
 // MARK: - Web process recovery
 
 extension YTWebPlayer: WKNavigationDelegate {
+    /// Recovery reload: arm the watchdog and press play once the document is
+    /// ready. Without this the autoplay guard would keep the restored song
+    /// paused forever after a web-process crash.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard resumeAfterLoad else { return }
+        MusicService.shared.expectingWebPlay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.resumeAfterLoad else { return }
+            self.playWeb()
+        }
+    }
+
     /// If the web content process dies mid-song, reload the last playing page
     /// and resume. Without this the tab goes permanently white/silent.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -628,7 +704,7 @@ extension YTWebPlayer: WKNavigationDelegate {
         frozenTicks = 0
         deadTicks = 0
         guard webIsPlaying || MusicService.shared.source == "YouTube Web" else { return }
-        resumeAfterLoad = true
+        resumeAfterLoad = webIsPlaying
         if let u = lastPlayURL {
             webView.load(URLRequest(url: u))
         } else {

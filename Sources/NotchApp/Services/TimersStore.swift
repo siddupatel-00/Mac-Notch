@@ -56,6 +56,7 @@ final class TimersStore: ObservableObject {
     private var customPlayer: AVPlayer?
 
     private var timer: Timer?
+    private var countdownDeadline: Date?
     private var swTimer: Timer?
     private let secsKey = "timerSeconds"
     private let runningKey = "timerRunning"
@@ -136,20 +137,24 @@ final class TimersStore: ObservableObject {
         timer?.invalidate()
         running = true
         if !resuming {
+            stopAlarmAudio()
             if seconds > 0 { totalSeconds = seconds }
             timeUp = false
             finishedMinutes = max(1, Int((Double(totalSeconds) / 60.0).rounded()))
         }
+        // Wall-clock deadline: a Timer that pauses (sleep, main-thread hitch)
+        // must not make the countdown run long.
+        countdownDeadline = Date().addingTimeInterval(Double(max(0, seconds)))
         persist()
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if self.seconds > 0 {
-                self.seconds -= 1
+            guard let dl = self.countdownDeadline else { return }
+            let left = Int(ceil(dl.timeIntervalSinceNow))
+            if left > 0 {
+                self.seconds = left
                 self.persist()
-                if self.seconds <= 0 {
-                    self.finishCountdown()
-                }
             } else {
+                self.seconds = 0
                 self.finishCountdown()
             }
         }
@@ -161,6 +166,7 @@ final class TimersStore: ObservableObject {
     func pause() {
         timer?.invalidate(); timer = nil
         running = false
+        countdownDeadline = nil
         persist()
     }
 
@@ -169,6 +175,7 @@ final class TimersStore: ObservableObject {
     func set(_ s: Int) {
         timer?.invalidate(); timer = nil
         running = false
+        countdownDeadline = nil
         timeUp = false
         seconds = max(0, s)
         if seconds > 0 {
@@ -186,7 +193,9 @@ final class TimersStore: ObservableObject {
     func dismissTimeUp() {
         timeUp = false
         running = false
+        countdownDeadline = nil
         seconds = totalSeconds > 0 ? totalSeconds : 25 * 60
+        stopAlarmAudio()
         persist()
         NotchManager.shared.hideAlert()
     }
@@ -194,6 +203,7 @@ final class TimersStore: ObservableObject {
     private func finishCountdown() {
         timer?.invalidate(); timer = nil
         running = false
+        countdownDeadline = nil
         seconds = 0
         if !timeUp {
             timeUp = true
@@ -208,7 +218,7 @@ final class TimersStore: ObservableObject {
         let d = UserDefaults.standard
         d.set(seconds, forKey: secsKey)
         d.set(running, forKey: runningKey)
-        d.set(running ? Date().timeIntervalSince1970 + Double(seconds) : 0, forKey: deadlineKey)
+        d.set(running ? (countdownDeadline?.timeIntervalSince1970 ?? 0) : 0, forKey: deadlineKey)
         d.set(totalSeconds, forKey: totalKey)
         d.set(timeUp, forKey: timeUpKey)
         d.set(finishedMinutes, forKey: finishedKey)
@@ -217,6 +227,7 @@ final class TimersStore: ObservableObject {
     /// Alert sound: local music file if chosen, else the picked system sound ×3.
     /// Store-level so it fires even when the notch/panel is closed.
     private func playAlarm() {
+        stopAlarmAudio()
         if let s = customSoundURL, let url = URL(string: s) {
             customPlayer = AVPlayer(url: url)
             customPlayer?.play()
@@ -245,7 +256,12 @@ final class TimersStore: ObservableObject {
         customSoundURL = url.absoluteString
     }
 
-    func clearCustomSound() { customSoundURL = nil; customPlayer?.pause(); customPlayer = nil }
+    func clearCustomSound() { customSoundURL = nil; stopAlarmAudio() }
+
+    private func stopAlarmAudio() {
+        customPlayer?.pause()
+        customPlayer = nil
+    }
 
     /// Show the tiny alert pill under the notch for time-up / alarm
     /// (no full-panel takeover).
@@ -342,6 +358,7 @@ final class TimersStore: ObservableObject {
         alarmFired = nil
         snoozeUntil = 0
         UserDefaults.standard.set(0, forKey: snoozeKey)
+        stopAlarmAudio()
         NotchManager.shared.hideAlert()
     }
 
@@ -350,6 +367,7 @@ final class TimersStore: ObservableObject {
         alarmFired = nil
         snoozeUntil = Date().timeIntervalSince1970 + 5 * 60
         UserDefaults.standard.set(snoozeUntil, forKey: snoozeKey)
+        stopAlarmAudio()
         NotchManager.shared.hideAlert()
     }
 
