@@ -53,6 +53,9 @@ final class SettingsStore: ObservableObject {
     @Published var outsideClickToClose: Bool = true {
         didSet { UserDefaults.standard.set(outsideClickToClose, forKey: "outsideClickToClose") }
     }
+    var isSettingsOpen: Bool {
+        NSApp.isSettingsWindowOpen
+    }
 
     init() {
         let d = UserDefaults.standard
@@ -87,5 +90,13 @@ final class SettingsStore: ObservableObject {
     func toggle(_ id: String) {
         if enabledTools.contains(id) { enabledTools.remove(id) }
         else { enabledTools.insert(id) }
+    }
+}
+
+extension NSApplication {
+    var isSettingsWindowOpen: Bool {
+        windows.contains { win in
+            win.isVisible && (win.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || (win.styleMask.contains(.titled) && !(win is NotchPanel)))
+        }
     }
 }

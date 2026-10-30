@@ -33,9 +33,11 @@ struct NotchRootView: View {
                     .frame(width: manager.collapsedWidth, height: manager.collapsedHeight)
                     .contentShape(Rectangle())
                     .onHover { hovering in
-                        if hovering { manager.scheduleOpen() } else { manager.cancelHover() }
+                        if hovering && !settings.isSettingsOpen { manager.scheduleOpen() } else { manager.cancelHover() }
                     }
-                    .onTapGesture { manager.expand() }
+                    .onTapGesture {
+                        if !settings.isSettingsOpen { manager.expand() }
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -76,8 +78,7 @@ struct ExpandedView: View {
                     Image(systemName: manager.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").foregroundColor(.secondary)
                 }.buttonStyle(.plain)
                 Button(action: {
-                    // Accessory apps have no app menu, so this gear is the only
-                    // way into Settings. Bring the app forward first.
+                    manager.collapse()
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
                 }) {
@@ -129,14 +130,14 @@ struct ExpandedView: View {
                     HStack(spacing: 6) {
                         ForEach(visibleTools) { t in
                             Button(action: { settings.selectedTool = t.id }) {
-                                VStack(spacing: 2) {
+                                VStack(spacing: 1) {
                                     Image(systemName: t.icon).font(.system(size: 14))
                                     Text(t.name).font(.system(size: 8))
                                 }
-                                .frame(width: 52, height: 44)
-                                .background(activeTool == t.id ? theme.accent.opacity(0.25) : Color.white.opacity(0.06))
-                                .cornerRadius(10)
-                                .foregroundColor(theme.accent)
+                                .frame(width: 44, height: 35)
+                                .background(activeTool == t.id ? (theme.current == .minimal ? Color.white.opacity(0.2) : theme.accent.opacity(0.25)) : Color.white.opacity(0.06))
+                                .cornerRadius(8)
+                                .foregroundColor(activeTool == t.id ? (theme.current == .minimal ? .white : theme.accent) : .white)
                             }.buttonStyle(.plain)
                         }
                     }
@@ -144,8 +145,8 @@ struct ExpandedView: View {
                     .frame(minWidth: geo.size.width, alignment: .center)
                 }
             }
-            .frame(height: 54)
-            .padding(.bottom, 10)
+            .frame(height: 42)
+            .padding(.bottom, 6)
         }
         .onChange(of: revenue.banner?.id) { _, newId in
             if newId != nil { manager.expand() }
@@ -188,7 +189,11 @@ struct SettingsView: View {
                     }
                 }
             }.padding(20)
-        }.frame(width: 420, height: 560)
+        }
+        .frame(width: 420, height: 560)
+        .onAppear {
+            NotchManager.shared.collapse()
+        }
     }
 }
 

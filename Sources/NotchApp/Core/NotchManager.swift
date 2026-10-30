@@ -14,8 +14,8 @@ final class NotchManager: ObservableObject {
     @Published var hasNotch = true
     @Published var isFullscreen = false
 
-    @Published var panelWidth: CGFloat = 760
-    @Published var expandedHeight: CGFloat = 440
+    @Published var panelWidth: CGFloat = 620
+    @Published var expandedHeight: CGFloat = 360
     let collapsedWidth: CGFloat = 200
     let collapsedHeight: CGFloat = 32
 
@@ -41,8 +41,8 @@ final class NotchManager: ObservableObject {
     private var preFullscreenSize: CGSize?
     private let panelWidthKey = "notch.panelWidth"
     private let panelHeightKey = "notch.panelHeight"
-    private let minPanelWidth: CGFloat = 520
-    private let minPanelHeight: CGFloat = 340
+    private let minPanelWidth: CGFloat = 460
+    private let minPanelHeight: CGFloat = 280
 
     // MARK: Setup
     func setup() {
@@ -165,6 +165,7 @@ final class NotchManager: ObservableObject {
 
     // MARK: State machine (main thread only)
     func expand() {
+        guard !SettingsStore.shared.isSettingsOpen else { return }
         guard !isExpanded, let screen = mainScreen() else { return }
         // Ignore stale open timer fired after user already moved away
         openTimer?.invalidate(); openTimer = nil
@@ -280,8 +281,8 @@ final class NotchManager: ObservableObject {
         guard isExpanded, let screen = mainScreen() else { return }
         isFullscreen = false
         preFullscreenSize = nil
-        panelWidth = 760
-        expandedHeight = 440
+        panelWidth = 620
+        expandedHeight = 360
         persistSize()
         let frame = NSRect(
             x: screen.frame.midX - panelWidth / 2,
@@ -316,6 +317,7 @@ final class NotchManager: ObservableObject {
     }
 
     func scheduleOpen() {
+        guard !SettingsStore.shared.isSettingsOpen else { return }
         guard SettingsStore.shared.hoverToOpen, !isExpanded, openTimer == nil,
               let screen = mainScreen() else { return }
         // Zero-delay fast path: hoverDelay 0.05 feels instant but still debounces fly-bys
@@ -394,6 +396,15 @@ final class NotchManager: ObservableObject {
                   Date().timeIntervalSince(self.lastExpandAt) > 0.6 else { return }
             self.collapse()
         }
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, self.isExpanded,
+                  let win = note.object as? NSWindow,
+                  win !== self.panel else { return }
+            self.collapse()
+        }
     }
 
     // MARK: Mouse polling with hysteresis
@@ -406,6 +417,11 @@ final class NotchManager: ObservableObject {
     }
 
     private func tick() {
+        if SettingsStore.shared.isSettingsOpen {
+            if isExpanded { collapse() }
+            cancelOpen()
+            return
+        }
         guard let screen = mainScreen() else { return }
         let mouse = NSEvent.mouseLocation
         // Mouse on another display while expanded: treat as left-the-panel
@@ -413,6 +429,7 @@ final class NotchManager: ObservableObject {
         let onMainScreen = screen.frame.contains(mouse)
         if !isExpanded {
             guard onMainScreen else { cancelOpen(); return }
+            guard !SettingsStore.shared.isSettingsOpen else { cancelOpen(); return }
             if hotRect(in: screen).contains(mouse) { scheduleOpen() } else { cancelOpen() }
         } else {
             guard let panel else { return }

@@ -42,7 +42,9 @@ final class CalendarStore: ObservableObject {
             self?.checkDue()
         }
         if let p = poll { RunLoop.main.add(p, forMode: .common) }
-        checkDue()
+        DispatchQueue.main.async { [weak self] in
+            self?.checkDue()
+        }
     }
 
     func add(title: String, date: Date) {

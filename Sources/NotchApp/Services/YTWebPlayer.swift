@@ -93,17 +93,14 @@ final class YTWebPlayer: NSObject, ObservableObject {
         // The site's layout is wider than the notch panel — zoom out so it all fits.
         w.pageZoom = 0.72
         web = w
-        // Parking spot: a REAL-SIZED transparent, click-through window.
-        // WebKit suspends media loading for a webview whose window is
-        // occluded/invisible — the old 2×2 window at (0,0) sat under the Dock,
-        // so after the initial buffer drained (~40-90s) every song starved
-        // while still reporting paused=false. A full-size clear window that is
-        // actually rendered (just invisible to the user) keeps the page live.
-        let parkSize = NSSize(width: 760, height: 460)
+        // Parking spot: tiny 2x2 spot tucked at the very top edge under the notch.
+        // Invisible to the user, not under the Dock, keeping media live without
+        // displaying the website on screen.
+        let parkSize = NSSize(width: 2, height: 2)
         let parkFrame: NSRect
         if let screen = NSScreen.main {
-            parkFrame = NSRect(x: screen.frame.midX - parkSize.width / 2,
-                              y: screen.frame.maxY - parkSize.height,
+            parkFrame = NSRect(x: screen.frame.midX - 1,
+                              y: screen.frame.maxY - 1,
                               width: parkSize.width, height: parkSize.height)
         } else {
             parkFrame = NSRect(origin: .zero, size: parkSize)
@@ -112,8 +109,6 @@ final class YTWebPlayer: NSObject, ObservableObject {
                             styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // Same level as the notch panel so it is never hidden behind the
-        // menu bar / Dock (both of which would re-introduce the occlusion).
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = true
@@ -127,7 +122,6 @@ final class YTWebPlayer: NSObject, ObservableObject {
         w.autoresizingMask = [.width, .height]
         panel.contentView = hold
         holderPanel = panel // RETAINED
-        panel.orderFrontRegardless()
         poll = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -275,9 +269,11 @@ final class YTWebPlayer: NSObject, ObservableObject {
         w.frame = hold.bounds
         w.autoresizingMask = [.width, .height]
         hold.addSubview(w)
-        // Re-assert on-screen ordering: an unoccluded park window is what keeps
-        // media buffering alive while the tab is closed.
-        holderPanel?.orderFrontRegardless()
+        if webIsPlaying {
+            holderPanel?.orderFrontRegardless()
+        } else {
+            holderPanel?.orderOut(nil)
+        }
     }
 
     private func ensureLoaded() {
