@@ -190,6 +190,11 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
     private var searchCache: [String: [YTEntry]] = [:]
     private var searchGen = 0
 
+    func loadTrendingIfNeeded() {
+        guard results.isEmpty, !searching else { return }
+        search("Top Songs")
+    }
+
     func search(_ q: String) {
         let query = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
@@ -299,14 +304,11 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
     /// and only used when the default client offers nothing playable.
     private func resolveURL(_ id: String) -> URL? {
         if let cached = cachedURL(id) { return cached }
-        // Preferred: plain audio track (itag 140 = m4a/AAC, the only
-        // AVPlayer-playable audio-only itags — 250/249 are webm/opus).
-        if let url = resolveOnce(id, extractorArgs: nil),
-           let itag = Self.itag(of: url),
-           [140, 141].contains(itag) {
+        // Preferred: direct audio track (m4a/AAC)
+        if let url = resolveOnce(id, extractorArgs: nil) {
             return url
         }
-        // Fallback: android client (muxed mp4 — audio still plays, no video shown).
+        // Fallback: android client (rate-bypassed)
         if let url = resolveOnce(id, extractorArgs: "youtube:player_client=android") {
             return url
         }
@@ -325,13 +327,13 @@ final class YouTubeService: ObservableObject, @unchecked Sendable {
         var args = [
             "-g", "-f", "bestaudio[ext=m4a]/bestaudio/best",
             "--no-playlist", "--no-warnings",
-            "--socket-timeout", "8", "--retries", "2",
+            "--socket-timeout", "6", "--retries", "1",
         ]
         if let ea = extractorArgs {
             args += ["--extractor-args", ea]
         }
         args.append("https://www.youtube.com/watch?v=\(id)")
-        guard let out = launch(args, timeout: 45),
+        guard let out = launch(args, timeout: 14),
               let first = out.components(separatedBy: "\n").first(where: { $0.hasPrefix("http") }),
               let url = URL(string: first.trimmingCharacters(in: .whitespacesAndNewlines)),
               Self.isUsable(url) else {

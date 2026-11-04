@@ -245,6 +245,16 @@ struct MusicHubView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxHeight: .infinity)
+            .onAppear {
+                if sel == "YouTube" {
+                    yt.loadTrendingIfNeeded()
+                }
+            }
+            .onChange(of: sel) { _, newSel in
+                if newSel == "YouTube" {
+                    yt.loadTrendingIfNeeded()
+                }
+            }
         }
     }
 
@@ -285,6 +295,9 @@ struct MusicHubView: View {
                     .frame(maxHeight: .infinity)
             } else {
                 ytResultsList
+                    .onAppear {
+                        yt.loadTrendingIfNeeded()
+                    }
             }
         }
     }

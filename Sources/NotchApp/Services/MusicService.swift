@@ -21,7 +21,28 @@ enum RepeatMode: String {
 final class MusicService: ObservableObject {
     static let shared = MusicService()
 
-    @Published var isPlaying = false
+    @Published var isPlaying = false {
+        didSet {
+            updateActivity()
+        }
+    }
+    private var playbackActivity: NSObjectProtocol?
+
+    private func updateActivity() {
+        if isPlaying {
+            if playbackActivity == nil {
+                playbackActivity = ProcessInfo.processInfo.beginActivity(
+                    options: [.userInitiated, .idleSystemSleepDisabled, .latencyCritical],
+                    reason: "NotchApp Music Playback"
+                )
+            }
+        } else {
+            if let act = playbackActivity {
+                ProcessInfo.processInfo.endActivity(act)
+                playbackActivity = nil
+            }
+        }
+    }
     @Published var title = "Nothing playing"
     @Published var subtitle = "Pick a source below"
     @Published var source = "Local"
@@ -179,10 +200,14 @@ final class MusicService: ObservableObject {
                 guard self.isPlaying else { self.stallTicks = 0; return }
                 if self.player?.currentItem?.status == .failed {
                     self.stallTicks = 0
-                    self.handleStreamFailure()
+                    if self.trackLength > 0, self.trackLength - pos < 20 {
+                        self.trackEnded()
+                    } else {
+                        self.handleStreamFailure()
+                    }
                     return
                 }
-                if self.trackLength > 0, pos >= self.trackLength - 0.25 {
+                if self.trackLength > 0, pos >= self.trackLength - 0.5 {
                     self.stallTicks = 0
                     self.trackEnded()
                     return
@@ -193,12 +218,13 @@ final class MusicService: ObservableObject {
                     return
                 }
                 self.stallTicks += 1
-                // Startup grace (pos ~0): allow 10s of buffering; after that, or
-                // mid-song, a frozen clock means no audio. Near the end it means over.
-                let limit = pos > 5 ? 6 : 20
+                // Startup grace (pos ~0): allow 10s of buffering.
+                // Near the end (within 15s of trackLength, or pos > 20 when trackLength is unknown/short),
+                // a frozen clock means the stream ended naturally — NOT a stream failure!
+                let limit = pos > 5 ? 12 : 20
                 guard self.stallTicks >= limit else { return }
                 self.stallTicks = 0
-                if self.trackLength > 0, self.trackLength - pos < 5 {
+                if (self.trackLength > 0 && self.trackLength - pos < 15) || (self.trackLength == 0 && pos > 20) {
                     self.trackEnded()
                 } else if pos > 5 {
                     self.handleStreamFailure()
@@ -338,7 +364,12 @@ final class MusicService: ObservableObject {
         guard source == "YouTube", let id = currentAudioId, !id.contains(":") else {
             player?.pause()
             isPlaying = false
+            YouTubeService.shared.resolving = false
             RemoteCommands.refresh()
+            return
+        }
+        if trackLength > 0, trackLength - position < 20 {
+            trackEnded()
             return
         }
         guard !didRetryStream else {
@@ -346,7 +377,8 @@ final class MusicService: ObservableObject {
             player?.pause()
             player?.replaceCurrentItem(with: nil)
             isPlaying = false
-            subtitle = "Stream expired — tap play to retry"
+            subtitle = "Playback ended"
+            YouTubeService.shared.resolving = false
             RemoteCommands.refresh()
             return
         }
@@ -535,30 +567,55 @@ final class MusicService: ObservableObject {
         endHandledToken = playToken
         switch source {
         case "Local":
-            guard !localTracks.isEmpty else { isPlaying = false; return }
+            guard !localTracks.isEmpty else {
+                isPlaying = false
+                position = trackLength > 0 ? trackLength : position
+                return
+            }
             if repeatMode == .one { playLocal(at: localIndex); return }
             if shuffle { playLocal(at: randomIndex(count: localTracks.count, excluding: localIndex)); return }
             if repeatMode == .all { playLocal(at: (localIndex + 1) % localTracks.count); return }
             isPlaying = false
+            position = trackLength > 0 ? trackLength : position
         case "YouTube":
             let r = YouTubeService.shared.results
-            guard !r.isEmpty else { isPlaying = false; return }
             if repeatMode == .one {
-                if let t = r.first(where: { $0.id == currentAudioId }) { YouTubeService.shared.play(t) }
-                else { isPlaying = false }
-                return
+                // Replay instantly from the beginning with no network resolve delay or spinner
+                if player?.currentItem != nil {
+                    player?.seek(to: .zero)
+                    player?.play()
+                    position = 0
+                    lastPos = -1
+                    stallTicks = 0
+                    isPlaying = true
+                    playToken += 1
+                    endHandledToken = -1
+                    return
+                } else if let t = r.first(where: { $0.id == currentAudioId }) {
+                    YouTubeService.shared.play(t)
+                    return
+                }
             }
-            if shuffle {
+            if shuffle, !r.isEmpty {
                 let ids = r.map(\.id)
                 let others = ids.indices.filter { ids[$0] != currentAudioId }
                 YouTubeService.shared.play(r[others.randomElement() ?? 0])
                 return
             }
-            let i = r.firstIndex(where: { $0.id == currentAudioId }) ?? 0
-            if repeatMode == .all { YouTubeService.shared.play(r[(i + 1) % r.count]); return }
+            if repeatMode == .all, !r.isEmpty {
+                let i = r.firstIndex(where: { $0.id == currentAudioId }) ?? 0
+                YouTubeService.shared.play(r[(i + 1) % r.count])
+                return
+            }
+            // Repeat is off: clean stop with no lingering loading state
             isPlaying = false
+            player?.pause()
+            position = trackLength > 0 ? trackLength : position
+            YouTubeService.shared.resolving = false
         default:
             isPlaying = false
+            player?.pause()
+            position = trackLength > 0 ? trackLength : position
         }
     }
 

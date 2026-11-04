@@ -32,6 +32,23 @@ final class YTWebPlayer: NSObject, ObservableObject {
     // Paused-while-expected counter: unexpected stalls get resumed, deliberate
     // user pauses (expectingWebPlay == false) are never touched.
     private var pausedStreak = 0
+    private var playbackActivity: NSObjectProtocol?
+
+    private func updateActivity(playing: Bool) {
+        if playing {
+            if playbackActivity == nil {
+                playbackActivity = ProcessInfo.processInfo.beginActivity(
+                    options: [.userInitiated, .idleSystemSleepDisabled, .latencyCritical],
+                    reason: "YouTube Web Playback"
+                )
+            }
+        } else {
+            if let act = playbackActivity {
+                ProcessInfo.processInfo.endActivity(act)
+                playbackActivity = nil
+            }
+        }
+    }
 
     /// Flight recorder: timestamped player/ad decisions for diagnosing kills.
     /// Read at ~/Library/Logs/NotchApp/ytweb.log. Rotates at ~200KB.
@@ -49,10 +66,20 @@ final class YTWebPlayer: NSObject, ObservableObject {
     private func setup() {
         let cfg = WKWebViewConfiguration()
         cfg.mediaTypesRequiringUserActionForPlayback = []
-        // NOTE: no CSS that hides the player's <video> on purpose. YouTube's
-        // web player STOPS loading when its video element is display:none or
-        // zero-sized (that caused songs to freeze). Playback reliability
-        // always wins over the audio-only cosmetic.
+        cfg.allowsAirPlayForMediaPlayback = true
+
+        let prefs = cfg.preferences
+        prefs.setValue(false, forKey: "hiddenPageDOMTimerThrottlingEnabled")
+        prefs.setValue(false, forKey: "requiresPageVisibilityToPlayAudio")
+        prefs.setValue(false, forKey: "interruptAudioOnPageVisibilityChangeEnabled")
+
+        // Visibility & focus spoofing: prevents YouTube from withholding chunks
+        cfg.userContentController.addUserScript(WKUserScript(
+            source: Self.visibilitySpoofScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        ))
+
         // Response patching (the layer real YouTube adblockers use): neuter ad
         // scheduling inside youtubei player/next responses BEFORE the player
         // ever sees an ad. Runs at document start, main frame only.
@@ -86,21 +113,20 @@ final class YTWebPlayer: NSObject, ObservableObject {
                 }
             }
         }
-        let w = WKWebView(frame: NSRect(x: 0, y: 0, width: 8, height: 8), configuration: cfg)
+        let w = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: cfg)
         w.navigationDelegate = self
-        // YT Music refuses the default WebKit UA ("not optimised for your browser").
-        w.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        // Genuine Safari UA avoids Google bot / WebView deprecation restrictions
+        w.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
         // The site's layout is wider than the notch panel — zoom out so it all fits.
         w.pageZoom = 0.72
         web = w
-        // Parking spot: tiny 2x2 spot tucked at the very top edge under the notch.
-        // Invisible to the user, not under the Dock, keeping media live without
-        // displaying the website on screen.
-        let parkSize = NSSize(width: 2, height: 2)
+        // Parking spot: 800x600 active view at normal level with 0.01 alpha so
+        // WebKit and macOS WindowServer never treat it as dormant/occluded.
+        let parkSize = NSSize(width: 800, height: 600)
         let parkFrame: NSRect
         if let screen = NSScreen.main {
-            parkFrame = NSRect(x: screen.frame.midX - 1,
-                              y: screen.frame.maxY - 1,
+            parkFrame = NSRect(x: screen.frame.midX - 400,
+                              y: screen.frame.maxY - 10,
                               width: parkSize.width, height: parkSize.height)
         } else {
             parkFrame = NSRect(origin: .zero, size: parkSize)
@@ -109,7 +135,8 @@ final class YTWebPlayer: NSObject, ObservableObject {
                             styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.level = .popUpMenu
+        panel.alphaValue = 0.01
+        panel.level = .normal
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = true
         panel.hasShadow = false
@@ -169,7 +196,7 @@ final class YTWebPlayer: NSObject, ObservableObject {
       }
       hookGlobal('ytInitialPlayerResponse');
       hookGlobal('ytInitialData');
-      function patchURL(u){return typeof u==='string'&&(u.indexOf('/youtubei/v1/')!==-1||u.indexOf('get_watch')!==-1||u.indexOf('/watch?')!==-1||u.indexOf('playlist?')!==-1);}
+      function patchURL(u){return typeof u==='string'&&(u.indexOf('/youtubei/v1/player')!==-1||u.indexOf('/youtubei/v1/next')!==-1||u.indexOf('get_watch')!==-1);}
       try{
         var origFetch=window.fetch;
         window.fetch=function(){
@@ -182,7 +209,10 @@ final class YTWebPlayer: NSObject, ObservableObject {
               try{
                 var json=JSON.parse(renameKeys(txt.slice(txt.indexOf('{'))));
                 stripDeep(json,0);
-                return new Response(JSON.stringify(json),{status:res.status,statusText:res.statusText,headers:res.headers});
+                var h=new Headers(res.headers);
+                h.delete('content-encoding');
+                h.delete('content-length');
+                return new Response(JSON.stringify(json),{status:res.status,statusText:res.statusText,headers:h});
               }catch(e){return res;}
             },function(){return res;});
           });
@@ -213,6 +243,21 @@ final class YTWebPlayer: NSObject, ObservableObject {
           return origSend.apply(this,arguments);
         };
       }catch(e){}
+    })();
+    """
+
+    // MARK: - Visibility Scripts
+
+    static let visibilitySpoofScript = """
+    (function(){
+      try {
+        Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+        Object.defineProperty(document, 'webkitVisibilityState', { get: function() { return 'visible'; }, configurable: true });
+        Object.defineProperty(document, 'hasFocus', { value: function() { return true; }, configurable: true });
+        window.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+        window.addEventListener('webkitvisibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+      } catch(e) {}
     })();
     """
 
